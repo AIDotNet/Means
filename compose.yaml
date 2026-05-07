@@ -1,0 +1,7 @@
+﻿services:
+  means:
+    image: means
+    build:
+      context: .
+      dockerfile: src/Means/Dockerfile
+
