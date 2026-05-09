@@ -12,6 +12,12 @@
     </ItemGroup>
 
     <ItemGroup>
+        <ProjectReference Include="..\Means.Core\Means.Core.csproj" />
+        <ProjectReference Include="..\Means.Infrastructure.SqliteFs\Means.Infrastructure.SqliteFs.csproj" />
+        <ProjectReference Include="..\Means.Protocol.S3\Means.Protocol.S3.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
       <Folder Include="Services\" />
     </ItemGroup>
 

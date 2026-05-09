@@ -1,0 +1,236 @@
+version: 1
+service: means-object-storage
+protocol: s3-compatible
+defaults:
+  region: us-east-1
+  service: s3
+  signingAlgorithm: AWS4-HMAC-SHA256
+  payloadHash: UNSIGNED-PAYLOAD
+addressing:
+  pathStyle:
+    template: "https://api.means.local/{bucket}/{key}"
+  virtualHostedStyle:
+    template: "https://{bucket}.means.local/{key}"
+authentication:
+  server:
+    modes:
+      - sigv4-header
+      - sigv4-query
+      - anonymous-policy
+    presign:
+      maxExpiresSeconds: 604800
+  browser:
+    modes:
+      - anonymous-policy
+      - presigned-url
+    disallowSecretKeySigning: true
+naming:
+  bucket:
+    minLength: 3
+    maxLength: 63
+    allowedCharacters: "a-z 0-9 - ."
+    mustStartAndEndWith: letter-or-digit
+    rejectConsecutiveDots: true
+    rejectDotHyphenPairs: true
+    rejectIpv4AddressShape: true
+  objectKey:
+    minUtf8Bytes: 1
+    maxUtf8Bytes: 1024
+    rejectControlCharacters: true
+operations:
+  listBuckets:
+    method: GET
+    path: "/"
+    auth: signed
+    responseXml: ListAllMyBucketsResult
+  createBucket:
+    method: PUT
+    path: "/{bucket}"
+    auth: signed
+  headBucket:
+    method: HEAD
+    path: "/{bucket}"
+    auth: signed-or-policy
+  deleteBucket:
+    method: DELETE
+    path: "/{bucket}"
+    auth: signed
+  listObjects:
+    method: GET
+    path: "/{bucket}"
+    query:
+      list-type: "2"
+      prefix: optional
+      delimiter: optional
+      continuation-token: optional
+      max-keys: optional
+    auth: signed-or-policy
+    responseXml: ListBucketResult
+  putObject:
+    method: PUT
+    path: "/{bucket}/{key}"
+    auth: signed-or-policy
+    requestHeaders:
+      Content-Type: optional
+      Cache-Control: optional
+      Content-Disposition: optional
+      x-amz-meta-*: optional
+    responseHeaders:
+      ETag: required
+  getObject:
+    method: GET
+    path: "/{bucket}/{key}"
+    auth: signed-or-policy
+    responseHeaders:
+      ETag: required
+      Last-Modified: required
+      Content-Length: required
+      Content-Type: required
+      Accept-Ranges: required
+      Content-Encoding: optional
+      Vary: optional
+      x-amz-meta-*: optional
+  headObject:
+    method: HEAD
+    path: "/{bucket}/{key}"
+    auth: signed-or-policy
+    responseHeaders:
+      ETag: required
+      Last-Modified: required
+      Content-Length: required
+      Content-Type: required
+      Accept-Ranges: required
+      x-amz-meta-*: optional
+  deleteObject:
+    method: DELETE
+    path: "/{bucket}/{key}"
+    auth: signed-or-policy
+  copyObject:
+    method: PUT
+    path: "/{bucket}/{key}"
+    auth: signed-or-policy
+    requestHeaders:
+      x-amz-copy-source: required
+    responseXml: CopyObjectResult
+  initiateMultipartUpload:
+    method: POST
+    path: "/{bucket}/{key}"
+    query:
+      uploads: ""
+    auth: signed-or-policy
+    requestHeaders:
+      Content-Type: optional
+      Cache-Control: optional
+      Content-Disposition: optional
+      x-amz-meta-*: optional
+    responseXml: InitiateMultipartUploadResult
+  uploadPart:
+    method: PUT
+    path: "/{bucket}/{key}"
+    query:
+      partNumber: required
+      uploadId: required
+    auth: signed-or-policy
+    responseHeaders:
+      ETag: required
+  completeMultipartUpload:
+    method: POST
+    path: "/{bucket}/{key}"
+    query:
+      uploadId: required
+    requestXml: CompleteMultipartUpload
+    auth: signed-or-policy
+    responseXml: CompleteMultipartUploadResult
+  abortMultipartUpload:
+    method: DELETE
+    path: "/{bucket}/{key}"
+    query:
+      uploadId: required
+    auth: signed-or-policy
+  listParts:
+    method: GET
+    path: "/{bucket}/{key}"
+    query:
+      uploadId: required
+    auth: signed-or-policy
+    responseXml: ListPartsResult
+  listMultipartUploads:
+    method: GET
+    path: "/{bucket}"
+    query:
+      uploads: ""
+      prefix: optional
+      key-marker: optional
+      upload-id-marker: optional
+      max-uploads: optional
+    auth: signed-or-policy
+    responseXml: ListMultipartUploadsResult
+  createPresignedGetUrl:
+    method: GET
+    path: "/{bucket}/{key}"
+    auth: local-signing
+  createPresignedPutUrl:
+    method: PUT
+    path: "/{bucket}/{key}"
+    auth: local-signing
+  createPresignedUploadPartUrl:
+    method: PUT
+    path: "/{bucket}/{key}"
+    query:
+      partNumber: required
+      uploadId: required
+    auth: local-signing
+errors:
+  - AccessDenied
+  - BucketAlreadyExists
+  - BucketNotEmpty
+  - EntityTooLarge
+  - EntityTooSmall
+  - InvalidArgument
+  - InvalidPart
+  - InvalidPartOrder
+  - InvalidRange
+  - InvalidRequest
+  - MalformedXML
+  - NoSuchBucket
+  - NoSuchKey
+  - NoSuchUpload
+  - SignatureDoesNotMatch
+multipartUpload:
+  partNumber:
+    min: 1
+    max: 10000
+  minimumNonFinalPartBytes: 5242880
+  defaultSdkPartBytes: 16777216
+  etag: "md5(concat(part-md5-bytes))-part-count"
+  unsupported:
+    - uploadPartCopy
+bucketPolicy:
+  jsonShape:
+    Version: optional
+    Statement:
+      Effect: Allow|Deny
+      Principal: "*"|"access-key"|{"AWS":"access-key"}
+      Action:
+        - s3:ListBucket
+        - s3:GetObject
+        - s3:PutObject
+        - s3:DeleteObject
+        - s3:AbortMultipartUpload
+        - s3:ListMultipartUploadParts
+      Resource:
+        - "arn:aws:s3:::bucket"
+        - "arn:aws:s3:::bucket/*"
+compression:
+  encodings:
+    - br
+    - gzip
+  varyHeader: Accept-Encoding
+  disableForRange: true
+  invalidRange:
+    statusCode: 416
+    errorCode: InvalidRange
+    contentRange: "bytes */{object-length}"
+  etag:
+    original: strong-md5
+    compressed: weak-with-encoding-suffix

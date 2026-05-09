@@ -1,0 +1,19 @@
+{
+  "name": "means-typescript-sdks",
+  "private": true,
+  "version": "0.1.0",
+  "description": "TypeScript SDK workspace for Means object storage.",
+  "license": "MIT",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @means/sdk && npm run build -w @means/sdk-node",
+    "clean": "npm run clean -w @means/sdk && npm run clean -w @means/sdk-node"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.3"
+  }
+}
+

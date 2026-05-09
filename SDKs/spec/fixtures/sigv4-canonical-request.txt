@@ -1,0 +1,7 @@
+GET
+/photos/cat.jpg
+X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=meansadmin%2F20260508%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20260508T000000Z&X-Amz-Expires=900&X-Amz-SignedHeaders=host
+host:api.means.local
+
+host
+UNSIGNED-PAYLOAD

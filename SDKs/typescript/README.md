@@ -1,0 +1,21 @@
+# Means TypeScript SDKs
+
+This workspace contains the publishable TypeScript packages for Means object storage.
+
+- `@means/sdk` is the shared browser-safe package. It builds S3-style Means URLs, executes anonymous requests, executes presigned GET/PUT URLs, parses S3 XML responses, and never contains AccessKey/SecretKey signing code.
+- `@means/sdk-node` is the Node extension. It depends on `@means/sdk`, adds AccessKey/SecretKey credentials, SigV4 request signing, and presigned URL generation.
+
+## Build
+
+```bash
+cd SDKs/typescript
+npm install
+npm run build
+```
+
+Each package emits:
+
+- `dist/esm/index.mjs`
+- `dist/cjs/index.js`
+- `dist/types/index.d.ts`
+

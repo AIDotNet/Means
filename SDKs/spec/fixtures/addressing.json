@@ -1,0 +1,14 @@
+{
+  "pathStyle": {
+    "host": "api.means.local",
+    "path": "/photos/cat.jpg",
+    "bucket": "photos",
+    "key": "cat.jpg"
+  },
+  "virtualHostedStyle": {
+    "host": "photos.means.local",
+    "path": "/cat.jpg",
+    "bucket": "photos",
+    "key": "cat.jpg"
+  }
+}

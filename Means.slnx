@@ -4,6 +4,17 @@
     <File Path="README.md" />
   </Folder>
   <Folder Name="/src/">
+    <Project Path="src/Means.Core/Means.Core.csproj" />
+    <Project Path="src/Means.Infrastructure.SqliteFs/Means.Infrastructure.SqliteFs.csproj" />
+    <Project Path="src/Means.Protocol.S3/Means.Protocol.S3.csproj" />
     <Project Path="src/Means/Means.csproj" />
+  </Folder>
+  <Folder Name="/SDKs/">
+    <Project Path="SDKs/csharp/Means.Client.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Means.ContractTests/Means.ContractTests.csproj" />
+    <Project Path="tests/Means.IntegrationTests/Means.IntegrationTests.csproj" />
+    <Project Path="tests/Means.UnitTests/Means.UnitTests.csproj" />
   </Folder>
 </Solution>
