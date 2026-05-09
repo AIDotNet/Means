@@ -137,6 +137,45 @@ public sealed partial class SqliteFsStore
                         value text not null,
                         updated_utc text not null
                     );
+                    create table if not exists storage_clusters(
+                        cluster_id text primary key,
+                        name text not null,
+                        created_utc text not null
+                    );
+                    create table if not exists storage_pools(
+                        pool_id text primary key,
+                        cluster_id text not null,
+                        name text not null,
+                        created_utc text not null,
+                        foreign key(cluster_id) references storage_clusters(cluster_id) on delete cascade
+                    );
+                    create table if not exists storage_nodes(
+                        node_id text primary key,
+                        cluster_id text not null,
+                        host_name text not null,
+                        endpoint text not null,
+                        status text not null,
+                        registered_utc text not null,
+                        last_heartbeat_utc text not null,
+                        foreign key(cluster_id) references storage_clusters(cluster_id) on delete cascade
+                    );
+                    create index if not exists ix_storage_nodes_cluster_status
+                        on storage_nodes(cluster_id, status, last_heartbeat_utc);
+                    create table if not exists storage_disks(
+                        node_id text not null,
+                        disk_id text not null,
+                        pool_id text not null,
+                        mount_path text not null,
+                        total_bytes integer not null,
+                        available_bytes integer not null,
+                        status text not null,
+                        last_seen_utc text not null,
+                        primary key(node_id, disk_id),
+                        foreign key(node_id) references storage_nodes(node_id) on delete cascade,
+                        foreign key(pool_id) references storage_pools(pool_id) on delete cascade
+                    );
+                    create index if not exists ix_storage_disks_pool
+                        on storage_disks(pool_id, status);
                     """;
                 await command.ExecuteNonQueryAsync(cancellationToken);
             }
