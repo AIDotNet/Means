@@ -9,7 +9,7 @@ namespace Means.Infrastructure.SqliteFs;
 /// The class is split into partial files by operation group so the storage adapter remains
 /// readable while still sharing the same transaction and file-layout helpers.
 /// </summary>
-public sealed partial class SqliteFsStore : IObjectStore, IAccessKeyStore, IBucketPolicyRepository, IConsoleStore
+public sealed partial class SqliteFsStore : IObjectStore, IAccessKeyStore, IBucketPolicyRepository, IConsoleStore, IClusterStore
 {
     private readonly SqliteFsOptions _options;
     private readonly SemaphoreSlim _initializationLock = new(1, 1);
