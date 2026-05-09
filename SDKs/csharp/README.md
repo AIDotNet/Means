@@ -5,9 +5,12 @@ Standalone C# SDK for the Means S3-compatible object storage API. The package ta
 ## Install from source
 
 ```bash
+dotnet build SDKs/csharp/Means.Client.csproj -c Release
+# or
 dotnet pack SDKs/csharp/Means.Client.csproj -c Release
 ```
 
+`Release` 构建或打包会在 `SDKs/csharp/bin/Release` 生成 `Means.Client.0.1.0.nupkg` 和 `Means.Client.0.1.0.snupkg`。
 Reference the generated `Means.Client` package or project from your application.
 
 ## Basic usage
