@@ -56,10 +56,24 @@ export interface ObjectInput extends BucketInput {
   key: string;
 }
 
+export interface ObjectVersionInput extends ObjectInput {
+  versionId?: string;
+}
+
 export interface ListObjectsInput extends BucketInput {
   prefix?: string;
   delimiter?: string;
   continuationToken?: string;
+  maxKeys?: number;
+}
+
+export type BucketVersioningStatus = "Off" | "Enabled" | "Suspended";
+
+export interface ListObjectVersionsInput extends BucketInput {
+  prefix?: string;
+  delimiter?: string;
+  keyMarker?: string;
+  versionIdMarker?: string;
   maxKeys?: number;
 }
 
@@ -74,7 +88,10 @@ export interface PutObjectInput extends ObjectInput {
 export interface CopyObjectInput extends ObjectInput {
   sourceBucket: string;
   sourceKey: string;
+  sourceVersionId?: string;
   metadata?: ObjectMetadata;
+  metadataDirective?: "COPY" | "REPLACE";
+  contentType?: string;
   cacheControl?: string;
   contentDisposition?: string;
 }
@@ -93,6 +110,15 @@ export interface UploadPartInput extends ObjectInput {
   contentType?: string;
 }
 
+export interface UploadPartCopyInput extends ObjectInput {
+  uploadId: string;
+  partNumber: number;
+  sourceBucket: string;
+  sourceKey: string;
+  sourceVersionId?: string;
+  copySourceRange?: string;
+}
+
 export interface CompletedMultipartPart {
   partNumber: number;
   etag: string;
@@ -109,10 +135,13 @@ export interface AbortMultipartUploadInput extends ObjectInput {
 
 export interface ListPartsInput extends ObjectInput {
   uploadId: string;
+  partNumberMarker?: number;
+  maxParts?: number;
 }
 
 export interface ListMultipartUploadsInput extends BucketInput {
   prefix?: string;
+  delimiter?: string;
   keyMarker?: string;
   uploadIdMarker?: string;
   maxUploads?: number;
@@ -127,6 +156,7 @@ export interface UploadObjectMultipartInput extends ObjectInput {
   cacheControl?: string;
   contentDisposition?: string;
   partSize?: number;
+  concurrency?: number;
 }
 
 export interface PresignedPutOptions extends MeansRequestOptions {
@@ -169,6 +199,64 @@ export interface ListObjectsResult {
   requestId?: string;
 }
 
+export interface BucketVersioningResult extends OperationResult {
+  bucket: string;
+  status: BucketVersioningStatus;
+}
+
+export interface ObjectVersion {
+  key: string;
+  versionId: string;
+  isLatest: boolean;
+  isDeleteMarker: boolean;
+  etag?: string;
+  size: number;
+  lastModified?: Date;
+}
+
+export interface ListObjectVersionsResult extends OperationResult {
+  bucket: string;
+  prefix?: string;
+  delimiter?: string;
+  isTruncated: boolean;
+  nextKeyMarker?: string;
+  nextVersionIdMarker?: string;
+  versions: ObjectVersion[];
+  commonPrefixes: string[];
+}
+
+export interface LifecycleRule {
+  id: string;
+  status: "Enabled" | "Disabled";
+  prefix?: string;
+  expirationDays?: number;
+  noncurrentVersionExpirationDays?: number;
+  abortIncompleteMultipartUploadDays?: number;
+}
+
+export interface BucketLifecycleConfiguration {
+  rules: LifecycleRule[];
+}
+
+export interface BucketLifecycleResult extends OperationResult {
+  bucket: string;
+  configuration: BucketLifecycleConfiguration;
+}
+
+export type ObjectTags = Record<string, string>;
+
+export interface ObjectTaggingResult extends OperationResult {
+  bucket: string;
+  key: string;
+  versionId?: string;
+  tags: ObjectTags;
+}
+
+export interface BucketXmlConfigurationResult extends OperationResult {
+  bucket: string;
+  xml: string;
+}
+
 export interface OperationResult {
   response: Response;
   requestId?: string;
@@ -180,6 +268,7 @@ export interface BucketOperationResult extends OperationResult {
 
 export interface ObjectHeaders {
   etag?: string;
+  versionId?: string;
   lastModified?: Date;
   contentLength?: number;
   contentType?: string;
@@ -212,8 +301,10 @@ export interface CopyObjectResult extends OperationResult {
   key: string;
   sourceBucket: string;
   sourceKey: string;
+  sourceVersionId?: string;
   etag?: string;
   lastModified?: Date;
+  versionId?: string;
 }
 
 export interface MultipartUploadResult extends OperationResult {
@@ -228,6 +319,18 @@ export interface UploadPartResult extends OperationResult {
   uploadId: string;
   partNumber: number;
   etag?: string;
+}
+
+export interface CopyPartResult extends OperationResult {
+  bucket: string;
+  key: string;
+  uploadId: string;
+  partNumber: number;
+  sourceBucket: string;
+  sourceKey: string;
+  sourceVersionId?: string;
+  etag?: string;
+  lastModified?: Date;
 }
 
 export interface CompleteMultipartUploadResult extends OperationResult {
@@ -248,6 +351,11 @@ export interface ListPartsResult extends OperationResult {
   bucket: string;
   key: string;
   uploadId: string;
+  initiated?: Date;
+  partNumberMarker: number;
+  nextPartNumberMarker: number;
+  maxParts: number;
+  isTruncated: boolean;
   parts: MultipartPart[];
 }
 
@@ -260,10 +368,15 @@ export interface MultipartUploadSummary {
 export interface ListMultipartUploadsResult extends OperationResult {
   bucket: string;
   prefix?: string;
+  delimiter?: string;
+  keyMarker?: string;
+  uploadIdMarker?: string;
+  maxUploads: number;
   isTruncated: boolean;
   nextKeyMarker?: string;
   nextUploadIdMarker?: string;
   uploads: MultipartUploadSummary[];
+  commonPrefixes: string[];
 }
 
 export interface MeansSdkErrorOptions {
@@ -376,6 +489,137 @@ export class MeansClient {
     };
   }
 
+  async getBucketVersioning(input: BucketInput, options: MeansRequestOptions = {}): Promise<BucketVersioningResult> {
+    assertBucket(input.bucket);
+    const url = this.bucketUrl(input.bucket);
+    url.searchParams.set("versioning", "");
+    const response = await this.execute("GET", url, { options });
+    const xml = await response.text();
+    return {
+      bucket: input.bucket,
+      status: (readXmlTag(xml, "Status") as BucketVersioningStatus | undefined) ?? "Off",
+      response,
+      requestId: getRequestId(response)
+    };
+  }
+
+  async setBucketVersioning(
+    input: BucketInput & { status: BucketVersioningStatus },
+    options: MeansRequestOptions = {}
+  ): Promise<BucketOperationResult> {
+    assertBucket(input.bucket);
+    assertVersioningStatus(input.status);
+    const url = this.bucketUrl(input.bucket);
+    url.searchParams.set("versioning", "");
+    const response = await this.execute("PUT", url, {
+      body: bucketVersioningXml(input.status),
+      headers: { "content-type": "application/xml" },
+      options
+    });
+    return {
+      bucket: input.bucket,
+      response,
+      requestId: getRequestId(response)
+    };
+  }
+
+  async listObjectVersions(
+    input: ListObjectVersionsInput,
+    options: MeansRequestOptions = {}
+  ): Promise<ListObjectVersionsResult> {
+    assertBucket(input.bucket);
+    const url = this.bucketUrl(input.bucket);
+    url.searchParams.set("versions", "");
+    appendQuery(url, "prefix", input.prefix);
+    appendQuery(url, "delimiter", input.delimiter);
+    appendQuery(url, "key-marker", input.keyMarker);
+    appendQuery(url, "version-id-marker", input.versionIdMarker);
+    appendQuery(url, "max-keys", input.maxKeys?.toString());
+    const response = await this.execute("GET", url, { options });
+    const xml = await response.text();
+    return {
+      ...parseObjectVersions(xml, input.bucket),
+      response,
+      requestId: getRequestId(response)
+    };
+  }
+
+  async getBucketLifecycle(input: BucketInput, options: MeansRequestOptions = {}): Promise<BucketLifecycleResult> {
+    assertBucket(input.bucket);
+    const url = this.bucketUrl(input.bucket);
+    url.searchParams.set("lifecycle", "");
+    const response = await this.execute("GET", url, { options });
+    const xml = await response.text();
+    return {
+      bucket: input.bucket,
+      configuration: parseBucketLifecycle(xml),
+      response,
+      requestId: getRequestId(response)
+    };
+  }
+
+  async putBucketLifecycle(
+    input: BucketInput & { configuration: BucketLifecycleConfiguration },
+    options: MeansRequestOptions = {}
+  ): Promise<BucketOperationResult> {
+    assertBucket(input.bucket);
+    assertLifecycleConfiguration(input.configuration);
+    const url = this.bucketUrl(input.bucket);
+    url.searchParams.set("lifecycle", "");
+    const response = await this.execute("PUT", url, {
+      body: bucketLifecycleXml(input.configuration),
+      headers: { "content-type": "application/xml" },
+      options
+    });
+    return {
+      bucket: input.bucket,
+      response,
+      requestId: getRequestId(response)
+    };
+  }
+
+  async deleteBucketLifecycle(input: BucketInput, options: MeansRequestOptions = {}): Promise<BucketOperationResult> {
+    assertBucket(input.bucket);
+    const url = this.bucketUrl(input.bucket);
+    url.searchParams.set("lifecycle", "");
+    const response = await this.execute("DELETE", url, { options });
+    return {
+      bucket: input.bucket,
+      response,
+      requestId: getRequestId(response)
+    };
+  }
+
+  async getBucketCors(input: BucketInput, options: MeansRequestOptions = {}): Promise<BucketXmlConfigurationResult> {
+    return this.getBucketXmlConfiguration(input, "cors", options);
+  }
+
+  async putBucketCors(
+    input: BucketInput & { xml: string },
+    options: MeansRequestOptions = {}
+  ): Promise<BucketOperationResult> {
+    return this.putBucketXmlConfiguration(input, "cors", "CORSConfiguration", options);
+  }
+
+  async deleteBucketCors(input: BucketInput, options: MeansRequestOptions = {}): Promise<BucketOperationResult> {
+    return this.deleteBucketXmlConfiguration(input, "cors", options);
+  }
+
+  async getBucketNotification(input: BucketInput, options: MeansRequestOptions = {}): Promise<BucketXmlConfigurationResult> {
+    return this.getBucketXmlConfiguration(input, "notification", options);
+  }
+
+  async putBucketNotification(
+    input: BucketInput & { xml: string },
+    options: MeansRequestOptions = {}
+  ): Promise<BucketOperationResult> {
+    return this.putBucketXmlConfiguration(input, "notification", "NotificationConfiguration", options);
+  }
+
+  async deleteBucketNotification(input: BucketInput, options: MeansRequestOptions = {}): Promise<BucketOperationResult> {
+    return this.deleteBucketXmlConfiguration(input, "notification", options);
+  }
+
   async putObject(input: PutObjectInput, options: MeansRequestOptions = {}): Promise<PutObjectResult> {
     assertBucket(input.bucket);
     assertKey(input.key);
@@ -397,27 +641,33 @@ export class MeansClient {
     };
   }
 
-  async getObject(input: ObjectInput, options: MeansRequestOptions = {}): Promise<GetObjectResult> {
+  async getObject(input: ObjectVersionInput, options: MeansRequestOptions = {}): Promise<GetObjectResult> {
     assertBucket(input.bucket);
     assertKey(input.key);
-    const response = await this.execute("GET", this.objectUrl(input.bucket, input.key), { options });
+    const url = this.objectUrl(input.bucket, input.key);
+    appendQuery(url, "versionId", input.versionId);
+    const response = await this.execute("GET", url, { options });
     return objectResult(response);
   }
 
-  async headObject(input: ObjectInput, options: MeansRequestOptions = {}): Promise<HeadObjectResult> {
+  async headObject(input: ObjectVersionInput, options: MeansRequestOptions = {}): Promise<HeadObjectResult> {
     assertBucket(input.bucket);
     assertKey(input.key);
-    const response = await this.execute("HEAD", this.objectUrl(input.bucket, input.key), { options });
+    const url = this.objectUrl(input.bucket, input.key);
+    appendQuery(url, "versionId", input.versionId);
+    const response = await this.execute("HEAD", url, { options });
     return {
       ...parseObjectHeaders(response),
       response
     };
   }
 
-  async deleteObject(input: ObjectInput, options: MeansRequestOptions = {}): Promise<OperationResult> {
+  async deleteObject(input: ObjectVersionInput, options: MeansRequestOptions = {}): Promise<OperationResult> {
     assertBucket(input.bucket);
     assertKey(input.key);
-    const response = await this.execute("DELETE", this.objectUrl(input.bucket, input.key), { options });
+    const url = this.objectUrl(input.bucket, input.key);
+    appendQuery(url, "versionId", input.versionId);
+    const response = await this.execute("DELETE", url, { options });
     return {
       response,
       requestId: getRequestId(response)
@@ -431,7 +681,8 @@ export class MeansClient {
     assertKey(input.sourceKey);
 
     const headers = objectWriteHeaders(input);
-    headers.set("x-amz-copy-source", `/${encodePathSegment(input.sourceBucket)}/${encodeObjectKey(input.sourceKey)}`);
+    headers.set("x-amz-copy-source", copySourceHeader(input.sourceBucket, input.sourceKey, input.sourceVersionId));
+    headers.set("x-amz-metadata-directive", normalizeMetadataDirective(input.metadataDirective, hasCopyOverrides(input)));
 
     const response = await this.execute("PUT", this.objectUrl(input.bucket, input.key), {
       headers,
@@ -444,8 +695,62 @@ export class MeansClient {
       key: input.key,
       sourceBucket: input.sourceBucket,
       sourceKey: input.sourceKey,
+      sourceVersionId: input.sourceVersionId,
       etag: cleanEtag(readXmlTag(xml, "ETag") ?? response.headers.get("etag") ?? undefined),
       lastModified: parseDate(readXmlTag(xml, "LastModified")),
+      versionId: response.headers.get("x-amz-version-id") ?? undefined,
+      response,
+      requestId: getRequestId(response)
+    };
+  }
+
+  async getObjectTagging(input: ObjectVersionInput, options: MeansRequestOptions = {}): Promise<ObjectTaggingResult> {
+    assertBucket(input.bucket);
+    assertKey(input.key);
+    const url = this.objectUrl(input.bucket, input.key);
+    url.searchParams.set("tagging", "");
+    appendQuery(url, "versionId", input.versionId);
+    const response = await this.execute("GET", url, { options });
+    const xml = await response.text();
+    return {
+      bucket: input.bucket,
+      key: input.key,
+      versionId: input.versionId,
+      tags: parseObjectTagging(xml),
+      response,
+      requestId: getRequestId(response)
+    };
+  }
+
+  async putObjectTagging(
+    input: ObjectVersionInput & { tags: ObjectTags },
+    options: MeansRequestOptions = {}
+  ): Promise<OperationResult> {
+    assertBucket(input.bucket);
+    assertKey(input.key);
+    assertTags(input.tags);
+    const url = this.objectUrl(input.bucket, input.key);
+    url.searchParams.set("tagging", "");
+    appendQuery(url, "versionId", input.versionId);
+    const response = await this.execute("PUT", url, {
+      body: objectTaggingXml(input.tags),
+      headers: { "content-type": "application/xml" },
+      options
+    });
+    return {
+      response,
+      requestId: getRequestId(response)
+    };
+  }
+
+  async deleteObjectTagging(input: ObjectVersionInput, options: MeansRequestOptions = {}): Promise<OperationResult> {
+    assertBucket(input.bucket);
+    assertKey(input.key);
+    const url = this.objectUrl(input.bucket, input.key);
+    url.searchParams.set("tagging", "");
+    appendQuery(url, "versionId", input.versionId);
+    const response = await this.execute("DELETE", url, { options });
+    return {
       response,
       requestId: getRequestId(response)
     };
@@ -504,6 +809,42 @@ export class MeansClient {
     };
   }
 
+  async uploadPartCopy(input: UploadPartCopyInput, options: MeansRequestOptions = {}): Promise<CopyPartResult> {
+    assertBucket(input.bucket);
+    assertKey(input.key);
+    assertUploadId(input.uploadId);
+    assertPartNumber(input.partNumber);
+    assertBucket(input.sourceBucket);
+    assertKey(input.sourceKey);
+    const url = this.objectUrl(input.bucket, input.key);
+    url.searchParams.set("partNumber", input.partNumber.toString());
+    url.searchParams.set("uploadId", input.uploadId);
+    const headers = new Headers();
+    headers.set("x-amz-copy-source", copySourceHeader(input.sourceBucket, input.sourceKey, input.sourceVersionId));
+    if (input.copySourceRange) {
+      headers.set("x-amz-copy-source-range", input.copySourceRange);
+    }
+
+    const response = await this.execute("PUT", url, {
+      headers,
+      options
+    });
+    const xml = await response.text();
+    return {
+      bucket: input.bucket,
+      key: input.key,
+      uploadId: input.uploadId,
+      partNumber: input.partNumber,
+      sourceBucket: input.sourceBucket,
+      sourceKey: input.sourceKey,
+      sourceVersionId: input.sourceVersionId,
+      etag: cleanEtag(readXmlTag(xml, "ETag") ?? response.headers.get("etag") ?? undefined),
+      lastModified: parseDate(readXmlTag(xml, "LastModified")),
+      response,
+      requestId: getRequestId(response)
+    };
+  }
+
   async completeMultipartUpload(
     input: CompleteMultipartUploadInput,
     options: MeansRequestOptions = {}
@@ -549,12 +890,19 @@ export class MeansClient {
     assertUploadId(input.uploadId);
     const url = this.objectUrl(input.bucket, input.key);
     url.searchParams.set("uploadId", input.uploadId);
+    appendQuery(url, "part-number-marker", input.partNumberMarker?.toString());
+    appendQuery(url, "max-parts", input.maxParts?.toString());
     const response = await this.execute("GET", url, { options });
     const xml = await response.text();
     return {
       bucket: readXmlTag(xml, "Bucket") ?? input.bucket,
       key: readXmlTag(xml, "Key") ?? input.key,
       uploadId: readXmlTag(xml, "UploadId") ?? input.uploadId,
+      initiated: parseDate(readXmlTag(xml, "Initiated")),
+      partNumberMarker: parseInteger(readXmlTag(xml, "PartNumberMarker")) ?? 0,
+      nextPartNumberMarker: parseInteger(readXmlTag(xml, "NextPartNumberMarker")) ?? 0,
+      maxParts: parseInteger(readXmlTag(xml, "MaxParts")) ?? 0,
+      isTruncated: (readXmlTag(xml, "IsTruncated") ?? "false").toLowerCase() === "true",
       parts: parseMultipartParts(xml),
       response,
       requestId: getRequestId(response)
@@ -569,6 +917,7 @@ export class MeansClient {
     const url = this.bucketUrl(input.bucket);
     url.searchParams.set("uploads", "");
     appendQuery(url, "prefix", input.prefix);
+    appendQuery(url, "delimiter", input.delimiter);
     appendQuery(url, "key-marker", input.keyMarker);
     appendQuery(url, "upload-id-marker", input.uploadIdMarker);
     appendQuery(url, "max-uploads", input.maxUploads?.toString());
@@ -577,10 +926,15 @@ export class MeansClient {
     return {
       bucket: readXmlTag(xml, "Bucket") ?? input.bucket,
       prefix: readXmlTag(xml, "Prefix") ?? undefined,
+      delimiter: readXmlTag(xml, "Delimiter") ?? undefined,
+      keyMarker: readXmlTag(xml, "KeyMarker") ?? undefined,
+      uploadIdMarker: readXmlTag(xml, "UploadIdMarker") ?? undefined,
+      maxUploads: parseInteger(readXmlTag(xml, "MaxUploads")) ?? 0,
       isTruncated: (readXmlTag(xml, "IsTruncated") ?? "false").toLowerCase() === "true",
       nextKeyMarker: readXmlTag(xml, "NextKeyMarker") ?? undefined,
       nextUploadIdMarker: readXmlTag(xml, "NextUploadIdMarker") ?? undefined,
       uploads: parseMultipartUploads(xml),
+      commonPrefixes: parseCommonPrefixes(xml),
       response,
       requestId: getRequestId(response)
     };
@@ -597,6 +951,7 @@ export class MeansClient {
       throw new RangeError("Multipart part size must be at least 5 MiB.");
     }
 
+    const concurrency = normalizeMultipartConcurrency(input.concurrency);
     const upload = await this.initiateMultipartUpload({
       bucket: input.bucket,
       key: input.key,
@@ -608,18 +963,38 @@ export class MeansClient {
     const parts: CompletedMultipartPart[] = [];
     try {
       const size = multipartBodySize(input.body);
-      let partNumber = 1;
-      for (let offset = 0; offset < size; offset += partSize) {
-        const part = await this.uploadPart({
-          bucket: input.bucket,
-          key: input.key,
-          uploadId: upload.uploadId,
-          partNumber,
-          body: multipartBodySlice(input.body, offset, Math.min(offset + partSize, size)),
-          contentType: input.contentType ?? multipartBodyContentType(input.body)
-        }, options);
-        parts.push({ partNumber, etag: part.etag ?? "" });
-        partNumber += 1;
+      const partCount = Math.ceil(size / partSize);
+      const completed = new Array<CompletedMultipartPart>(partCount);
+      let nextPartIndex = 0;
+      let failed = false;
+      const worker = async () => {
+        while (!failed) {
+          const partIndex = nextPartIndex;
+          nextPartIndex += 1;
+          if (partIndex >= partCount) {
+            return;
+          }
+
+          const partNumber = partIndex + 1;
+          const offset = partIndex * partSize;
+          const part = await this.uploadPart({
+            bucket: input.bucket,
+            key: input.key,
+            uploadId: upload.uploadId,
+            partNumber,
+            body: multipartBodySlice(input.body, offset, Math.min(offset + partSize, size)),
+            contentType: input.contentType ?? multipartBodyContentType(input.body)
+          }, options).catch((error) => {
+            failed = true;
+            throw error;
+          });
+          completed[partIndex] = { partNumber, etag: part.etag ?? "" };
+        }
+      };
+
+      if (partCount > 0) {
+        await Promise.all(Array.from({ length: Math.min(concurrency, partCount) }, () => worker()));
+        parts.push(...completed);
       }
 
       if (parts.length === 0) {
@@ -712,6 +1087,61 @@ export class MeansClient {
       bucket,
       key
     });
+  }
+
+  private async getBucketXmlConfiguration(
+    input: BucketInput,
+    subresource: string,
+    options: MeansRequestOptions
+  ): Promise<BucketXmlConfigurationResult> {
+    assertBucket(input.bucket);
+    const url = this.bucketUrl(input.bucket);
+    url.searchParams.set(subresource, "");
+    const response = await this.execute("GET", url, { options });
+    return {
+      bucket: input.bucket,
+      xml: await response.text(),
+      response,
+      requestId: getRequestId(response)
+    };
+  }
+
+  private async putBucketXmlConfiguration(
+    input: BucketInput & { xml: string },
+    subresource: string,
+    expectedRootName: string,
+    options: MeansRequestOptions
+  ): Promise<BucketOperationResult> {
+    assertBucket(input.bucket);
+    assertXmlRoot(input.xml, expectedRootName);
+    const url = this.bucketUrl(input.bucket);
+    url.searchParams.set(subresource, "");
+    const response = await this.execute("PUT", url, {
+      body: input.xml,
+      headers: { "content-type": "application/xml" },
+      options
+    });
+    return {
+      bucket: input.bucket,
+      response,
+      requestId: getRequestId(response)
+    };
+  }
+
+  private async deleteBucketXmlConfiguration(
+    input: BucketInput,
+    subresource: string,
+    options: MeansRequestOptions
+  ): Promise<BucketOperationResult> {
+    assertBucket(input.bucket);
+    const url = this.bucketUrl(input.bucket);
+    url.searchParams.set(subresource, "");
+    const response = await this.execute("DELETE", url, { options });
+    return {
+      bucket: input.bucket,
+      response,
+      requestId: getRequestId(response)
+    };
   }
 
   private async execute(
@@ -887,6 +1317,7 @@ function parseObjectHeaders(response: Response): ObjectHeaders {
 
   return {
     etag: cleanEtag(response.headers.get("etag") ?? undefined),
+    versionId: response.headers.get("x-amz-version-id") ?? undefined,
     lastModified: parseDate(response.headers.get("last-modified") ?? undefined),
     contentLength: parseInteger(response.headers.get("content-length") ?? undefined),
     contentType: response.headers.get("content-type") ?? undefined,
@@ -931,6 +1362,63 @@ function parseListObjects(xml: string, fallbackBucket: string): Omit<ListObjects
   };
 }
 
+function parseObjectVersions(xml: string, fallbackBucket: string): Omit<ListObjectVersionsResult, "response" | "requestId"> {
+  const versions = [
+    ...findXmlElements(xml, "Version").map((versionXml) => parseObjectVersion(versionXml, false)),
+    ...findXmlElements(xml, "DeleteMarker").map((versionXml) => parseObjectVersion(versionXml, true))
+  ].filter((version) => version.key.length > 0 && version.versionId.length > 0);
+
+  const commonPrefixes = parseCommonPrefixes(xml);
+
+  return {
+    bucket: readXmlTag(xml, "Name") ?? fallbackBucket,
+    prefix: readXmlTag(xml, "Prefix") ?? undefined,
+    delimiter: readXmlTag(xml, "Delimiter") ?? undefined,
+    isTruncated: (readXmlTag(xml, "IsTruncated") ?? "false").toLowerCase() === "true",
+    nextKeyMarker: readXmlTag(xml, "NextKeyMarker") ?? undefined,
+    nextVersionIdMarker: readXmlTag(xml, "NextVersionIdMarker") ?? undefined,
+    versions,
+    commonPrefixes
+  };
+}
+
+function parseObjectTagging(xml: string): ObjectTags {
+  const tags: ObjectTags = {};
+  for (const tagXml of findXmlElements(xml, "Tag")) {
+    const key = readXmlTag(tagXml, "Key");
+    if (key) {
+      tags[key] = readXmlTag(tagXml, "Value") ?? "";
+    }
+  }
+
+  return tags;
+}
+
+function parseObjectVersion(xml: string, isDeleteMarker: boolean): ObjectVersion {
+  return {
+    key: readXmlTag(xml, "Key") ?? "",
+    versionId: readXmlTag(xml, "VersionId") ?? "",
+    isLatest: (readXmlTag(xml, "IsLatest") ?? "false").toLowerCase() === "true",
+    isDeleteMarker,
+    etag: cleanEtag(readXmlTag(xml, "ETag")),
+    size: parseInteger(readXmlTag(xml, "Size")) ?? 0,
+    lastModified: parseDate(readXmlTag(xml, "LastModified"))
+  };
+}
+
+function parseBucketLifecycle(xml: string): BucketLifecycleConfiguration {
+  return {
+    rules: findXmlElements(xml, "Rule").map((ruleXml) => ({
+      id: readXmlTag(ruleXml, "ID") ?? "",
+      status: ((readXmlTag(ruleXml, "Status") as "Enabled" | "Disabled" | undefined) ?? "Disabled"),
+      prefix: readXmlTag(ruleXml, "Prefix") ?? "",
+      expirationDays: parseInteger(readXmlTag(findXmlElements(ruleXml, "Expiration")[0] ?? "", "Days")),
+      noncurrentVersionExpirationDays: parseInteger(readXmlTag(findXmlElements(ruleXml, "NoncurrentVersionExpiration")[0] ?? "", "NoncurrentDays")),
+      abortIncompleteMultipartUploadDays: parseInteger(readXmlTag(findXmlElements(ruleXml, "AbortIncompleteMultipartUpload")[0] ?? "", "DaysAfterInitiation"))
+    }))
+  };
+}
+
 function parseMultipartParts(xml: string): MultipartPart[] {
   return findXmlElements(xml, "Part").map((partXml) => ({
     partNumber: parseInteger(readXmlTag(partXml, "PartNumber")) ?? 0,
@@ -948,10 +1436,50 @@ function parseMultipartUploads(xml: string): MultipartUploadSummary[] {
   })).filter((upload) => upload.key.length > 0 && upload.uploadId.length > 0);
 }
 
+function parseCommonPrefixes(xml: string): string[] {
+  return findXmlElements(xml, "CommonPrefixes")
+    .map((prefixXml) => readXmlTag(prefixXml, "Prefix") ?? "")
+    .filter((prefix) => prefix.length > 0);
+}
+
 function completeMultipartXml(parts: CompletedMultipartPart[]): string {
   return `<CompleteMultipartUpload>${parts.map((part) =>
     `<Part><PartNumber>${part.partNumber}</PartNumber><ETag>&quot;${escapeXml(cleanEtag(part.etag) ?? part.etag)}&quot;</ETag></Part>`
   ).join("")}</CompleteMultipartUpload>`;
+}
+
+function objectTaggingXml(tags: ObjectTags): string {
+  return `<Tagging><TagSet>${Object.entries(tags).map(([key, value]) =>
+    `<Tag><Key>${escapeXml(key)}</Key><Value>${escapeXml(value ?? "")}</Value></Tag>`
+  ).join("")}</TagSet></Tagging>`;
+}
+
+function bucketVersioningXml(status: BucketVersioningStatus): string {
+  return status === "Off"
+    ? "<VersioningConfiguration />"
+    : `<VersioningConfiguration><Status>${escapeXml(status)}</Status></VersioningConfiguration>`;
+}
+
+function bucketLifecycleXml(configuration: BucketLifecycleConfiguration): string {
+  return `<LifecycleConfiguration>${configuration.rules.map((rule) =>
+    `<Rule><ID>${escapeXml(rule.id)}</ID><Status>${escapeXml(rule.status)}</Status><Filter><Prefix>${escapeXml(rule.prefix ?? "")}</Prefix></Filter>${rule.expirationDays == null ? "" : `<Expiration><Days>${rule.expirationDays}</Days></Expiration>`}${rule.noncurrentVersionExpirationDays == null ? "" : `<NoncurrentVersionExpiration><NoncurrentDays>${rule.noncurrentVersionExpirationDays}</NoncurrentDays></NoncurrentVersionExpiration>`}${rule.abortIncompleteMultipartUploadDays == null ? "" : `<AbortIncompleteMultipartUpload><DaysAfterInitiation>${rule.abortIncompleteMultipartUploadDays}</DaysAfterInitiation></AbortIncompleteMultipartUpload>`}</Rule>`
+  ).join("")}</LifecycleConfiguration>`;
+}
+
+function copySourceHeader(bucket: string, key: string, versionId?: string): string {
+  const value = `/${encodePathSegment(bucket)}/${encodeObjectKey(key)}`;
+  return versionId ? `${value}?versionId=${encodeRfc3986(versionId)}` : value;
+}
+
+function hasCopyOverrides(input: CopyObjectInput): boolean {
+  return input.metadata != null
+    || input.contentType != null
+    || input.cacheControl != null
+    || input.contentDisposition != null;
+}
+
+function normalizeMetadataDirective(value: "COPY" | "REPLACE" | undefined, hasOverrides: boolean): "COPY" | "REPLACE" {
+  return value ?? (hasOverrides ? "REPLACE" : "COPY");
 }
 
 function readXmlTag(xml: string, tag: string): string | undefined {
@@ -1092,6 +1620,71 @@ function assertPartNumber(partNumber: number): void {
   }
 }
 
+function assertVersioningStatus(status: BucketVersioningStatus): void {
+  if (status !== "Off" && status !== "Enabled" && status !== "Suspended") {
+    throw new TypeError("Versioning status must be Off, Enabled, or Suspended.");
+  }
+}
+
+function assertLifecycleConfiguration(configuration: BucketLifecycleConfiguration): void {
+  if (!configuration || !Array.isArray(configuration.rules)) {
+    throw new TypeError("Lifecycle configuration requires a rules array.");
+  }
+
+  if (configuration.rules.length < 1 || configuration.rules.length > 1000) {
+    throw new RangeError("Lifecycle configuration requires 1 to 1000 rules.");
+  }
+
+  for (const rule of configuration.rules) {
+    if (!rule.id || rule.id.trim().length === 0) {
+      throw new TypeError("Lifecycle rule IDs are required.");
+    }
+
+    if (rule.status !== "Enabled" && rule.status !== "Disabled") {
+      throw new TypeError("Lifecycle rule status must be Enabled or Disabled.");
+    }
+
+    assertPositiveInteger(rule.expirationDays, "expirationDays");
+    assertPositiveInteger(rule.noncurrentVersionExpirationDays, "noncurrentVersionExpirationDays");
+    assertPositiveInteger(rule.abortIncompleteMultipartUploadDays, "abortIncompleteMultipartUploadDays");
+  }
+}
+
+function assertTags(tags: ObjectTags): void {
+  if (!tags || typeof tags !== "object" || Array.isArray(tags)) {
+    throw new TypeError("Object tags must be a key/value object.");
+  }
+
+  for (const key of Object.keys(tags)) {
+    if (key.trim().length === 0) {
+      throw new TypeError("Object tag keys cannot be empty.");
+    }
+  }
+}
+
+function assertXmlRoot(xml: string, expectedRootName: string): void {
+  if (!xml || xml.trim().length === 0) {
+    throw new TypeError("Configuration XML is required.");
+  }
+
+  const match = /^<\?xml[\s\S]*?\?>\s*/i.exec(xml.trim());
+  const withoutDeclaration = match ? xml.trim().slice(match[0].length).trimStart() : xml.trim();
+  const root = /^<([A-Za-z_][\w.-]*:)?([A-Za-z_][\w.-]*)[\s>/]/.exec(withoutDeclaration)?.[2];
+  if (root !== expectedRootName) {
+    throw new TypeError(`Configuration XML root must be ${expectedRootName}.`);
+  }
+}
+
+function assertPositiveInteger(value: number | undefined, name: string): void {
+  if (value == null) {
+    return;
+  }
+
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new RangeError(`${name} must be a positive integer.`);
+  }
+}
+
 function assertCompletedParts(parts: CompletedMultipartPart[]): void {
   if (!Array.isArray(parts) || parts.length === 0) {
     throw new TypeError("At least one completed part is required.");
@@ -1138,6 +1731,18 @@ function multipartBodySlice(body: MultipartUploadBody, start: number, end: numbe
 
 function multipartBodyContentType(body: MultipartUploadBody): string | undefined {
   return typeof Blob !== "undefined" && body instanceof Blob && body.type.length > 0 ? body.type : undefined;
+}
+
+function normalizeMultipartConcurrency(value: number | undefined): number {
+  if (value === undefined) {
+    return 3;
+  }
+
+  if (!Number.isFinite(value) || value < 1) {
+    throw new RangeError("Multipart concurrency must be at least 1.");
+  }
+
+  return Math.min(Math.floor(value), 16);
 }
 
 function encodeRfc3986(value: string): string {

@@ -7,8 +7,11 @@ namespace Means.Core;
 public sealed record CopyObjectRequest(
     string SourceBucket,
     string SourceKey,
+    string? SourceVersionId,
     string DestinationBucket,
     string DestinationKey,
     IReadOnlyDictionary<string, string> Metadata,
+    string MetadataDirective,
+    string? ContentType,
     string? CacheControl,
     string? ContentDisposition);

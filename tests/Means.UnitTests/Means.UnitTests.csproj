@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Means.Core\Means.Core.csproj" />
+    <ProjectReference Include="..\..\src\Means.Infrastructure.XlFs\Means.Infrastructure.XlFs.csproj" />
     <ProjectReference Include="..\..\src\Means.Protocol.S3\Means.Protocol.S3.csproj" />
   </ItemGroup>
 

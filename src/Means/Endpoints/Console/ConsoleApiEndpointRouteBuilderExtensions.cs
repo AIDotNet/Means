@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Security.Claims;
 using System.Text.Json;
+using Means.Configuration;
 using Means.Core;
 using Means.Infrastructure.SqliteFs;
 using Means.Protocol.S3;
@@ -28,16 +29,29 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
         authenticated.MapGet("/auth/session", Session);
         authenticated.MapGet("/overview", OverviewAsync);
         authenticated.MapGet("/dashboard-stats", DashboardStatsAsync);
+        authenticated.MapGet("/cluster", ClusterAsync);
+        authenticated.MapGet("/diagnostics", DiagnosticsAsync);
+        authenticated.MapGet("/background-tasks", BackgroundTasksAsync);
+        authenticated.MapPost("/background-tasks/{taskId}/run", RunBackgroundTaskAsync);
+        authenticated.MapGet("/ec-profiles", ListErasureCodingProfilesAsync);
+        authenticated.MapPut("/ec-profiles/{profileId}", SaveErasureCodingProfileAsync);
+        authenticated.MapDelete("/ec-profiles/{profileId}", DeleteErasureCodingProfileAsync);
         authenticated.MapGet("/buckets", BucketsAsync);
         authenticated.MapPost("/buckets", CreateBucketAsync);
         authenticated.MapDelete("/buckets/{bucketName}", DeleteBucketAsync);
         authenticated.MapGet("/buckets/{bucketName}/summary", BucketSummaryAsync);
         authenticated.MapGet("/buckets/{bucketName}/settings", BucketSettingsAsync);
         authenticated.MapPut("/buckets/{bucketName}/settings", UpdateBucketSettingsAsync);
+        authenticated.MapGet("/buckets/{bucketName}/versioning", GetBucketVersioningAsync);
+        authenticated.MapPut("/buckets/{bucketName}/versioning", PutBucketVersioningAsync);
+        authenticated.MapGet("/buckets/{bucketName}/lifecycle", GetBucketLifecycleAsync);
+        authenticated.MapPut("/buckets/{bucketName}/lifecycle", PutBucketLifecycleAsync);
+        authenticated.MapDelete("/buckets/{bucketName}/lifecycle", DeleteBucketLifecycleAsync);
         authenticated.MapGet("/buckets/{bucketName}/policy", GetPolicyAsync);
         authenticated.MapPut("/buckets/{bucketName}/policy", PutPolicyAsync);
         authenticated.MapDelete("/buckets/{bucketName}/policy", DeletePolicyAsync);
         authenticated.MapGet("/buckets/{bucketName}/objects", ListObjectsAsync);
+        authenticated.MapGet("/buckets/{bucketName}/objects/versions", ListObjectVersionsAsync);
         authenticated.MapGet("/buckets/{bucketName}/objects/detail", HeadObjectAsync);
         authenticated.MapDelete("/buckets/{bucketName}/objects", DeleteObjectAsync);
         authenticated.MapPost("/buckets/{bucketName}/objects/copy", CopyObjectAsync);
@@ -132,8 +146,10 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
     private static async Task<IResult> DashboardStatsAsync(
         int? hours,
         IConsoleStore consoleStore,
+        IClusterStore clusterStore,
         IOptions<SqliteFsOptions> storageOptions,
         IOptions<S3AddressingOptions> addressingOptions,
+        IOptions<ClusterOptions> clusterOptions,
         CancellationToken cancellationToken)
     {
         var requestedHours = Math.Clamp(hours ?? 24, 1, 168);
@@ -156,6 +172,13 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
             GetPathStatus("Object Blobs", objectsPath, isFilePath: false)
         };
         var onlineDrives = pathStatuses.Count(path => path.Online);
+        var topology = await clusterStore.GetClusterTopologyAsync(ClusterOfflineBefore(clusterOptions.Value), cancellationToken);
+        var onlineNodes = topology.Nodes.Count(node => node.Status == ClusterNodeStatuses.Online);
+        var offlineNodes = topology.Nodes.Count - onlineNodes;
+        var clusterDisks = topology.Nodes.SelectMany(node => node.Disks).ToArray();
+        var clusterOnlineDrives = clusterDisks.Count(disk => disk.Status == StorageDiskStatuses.Online);
+        var clusterOfflineDrives = clusterDisks.Length - clusterOnlineDrives;
+        var poolResponses = BuildDashboardPools(topology, capacity, metrics.TotalBytes, pathStatuses.Length, onlineDrives);
         var paddedHourly = PadHourlyMetrics(startUtc, requestedHours, hourlyMetrics);
         var usageByBucket = bucketUsage.ToDictionary(bucket => bucket.BucketName, StringComparer.Ordinal);
         var recentBuckets = BuildRecentBuckets(bucketActivity, bucketUsage, usageByBucket);
@@ -172,10 +195,10 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
                 paddedHourly.Sum(point => point.ErrorCount),
                 version),
             new DashboardNodesResponse(
-                ServersOnline: 1,
-                ServersOffline: 0,
-                DrivesOnline: onlineDrives,
-                DrivesOffline: pathStatuses.Length - onlineDrives,
+                ServersOnline: topology.Nodes.Count > 0 ? onlineNodes : 1,
+                ServersOffline: topology.Nodes.Count > 0 ? offlineNodes : 0,
+                DrivesOnline: clusterDisks.Length > 0 ? clusterOnlineDrives : onlineDrives,
+                DrivesOffline: clusterDisks.Length > 0 ? clusterOfflineDrives : pathStatuses.Length - onlineDrives,
                 DatabasePath: databasePath,
                 ObjectsPath: objectsPath,
                 ServiceHost: addressing.ServiceHost,
@@ -184,18 +207,128 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
                 Paths: pathStatuses),
             paddedHourly,
             recentBuckets,
-            new[]
-            {
-                new DashboardPoolResponse(
-                    "Pool 1",
-                    capacity.TotalBytes,
-                    capacity.UsedBytes,
-                    capacity.FreeBytes,
-                    capacity.ObjectBytes,
-                    pathStatuses.Length,
-                    onlineDrives,
-                    pathStatuses.Length - onlineDrives)
-            }));
+            poolResponses));
+    }
+
+    private static async Task<IResult> ClusterAsync(
+        HttpContext context,
+        IClusterStore clusterStore,
+        IConsoleStore consoleStore,
+        IOptions<ClusterOptions> clusterOptions,
+        CancellationToken cancellationToken)
+    {
+        var topology = await clusterStore.GetClusterTopologyAsync(ClusterOfflineBefore(clusterOptions.Value), cancellationToken);
+        await AppendAuditAsync(consoleStore, Actor(context), "cluster.read", topology.Cluster.ClusterId, "success", null, cancellationToken);
+        return Results.Ok(topology);
+    }
+
+    private static async Task<IResult> DiagnosticsAsync(
+        HttpContext context,
+        IConsoleStore consoleStore,
+        IBackgroundTaskManager backgroundTasks,
+        IOptions<ClusterOptions> clusterOptions,
+        CancellationToken cancellationToken)
+    {
+        var diagnostics = await consoleStore.GetClusterDiagnosticsAsync(ClusterOfflineBefore(clusterOptions.Value), cancellationToken);
+        diagnostics = diagnostics with { BackgroundTasks = backgroundTasks.ListTasks() };
+        await AppendAuditAsync(
+            consoleStore,
+            Actor(context),
+            "diagnostics.read",
+            diagnostics.Topology.Cluster.ClusterId,
+            "success",
+            null,
+            cancellationToken);
+        return Results.Ok(diagnostics);
+    }
+
+    private static async Task<IResult> BackgroundTasksAsync(
+        HttpContext context,
+        IBackgroundTaskManager backgroundTasks,
+        IConsoleStore consoleStore,
+        CancellationToken cancellationToken)
+    {
+        var response = new BackgroundTaskManagementResponse(
+            backgroundTasks.ListGroups(),
+            backgroundTasks.ListTasks(),
+            backgroundTasks.ListHistory(taskId: null, limit: 50));
+        await AppendAuditAsync(consoleStore, Actor(context), "background-task.read", "background-tasks", "success", null, cancellationToken);
+        return Results.Ok(response);
+    }
+
+    private static async Task<IResult> RunBackgroundTaskAsync(
+        HttpContext context,
+        string taskId,
+        IBackgroundTaskManager backgroundTasks,
+        IConsoleStore consoleStore,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var snapshot = await backgroundTasks.RunTaskAsync(taskId, cancellationToken);
+            await AppendAuditAsync(
+                consoleStore,
+                Actor(context),
+                "background-task.run",
+                snapshot.TaskId,
+                snapshot.Status == BackgroundTaskStatuses.Succeeded ? "success" : snapshot.Status.ToLowerInvariant(),
+                snapshot.LastResult ?? snapshot.LastError,
+                cancellationToken);
+            return Results.Ok(snapshot);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            await AppendAuditAsync(consoleStore, Actor(context), "background-task.run", taskId, "failed", ex.Message, cancellationToken);
+            throw;
+        }
+    }
+
+    private static async Task<IResult> ListErasureCodingProfilesAsync(
+        IErasureCodingProfileStore profiles,
+        CancellationToken cancellationToken)
+    {
+        return Results.Ok(await profiles.ListErasureCodingProfilesAsync(cancellationToken));
+    }
+
+    private static async Task<IResult> SaveErasureCodingProfileAsync(
+        HttpContext context,
+        string profileId,
+        SaveErasureCodingProfileRequest request,
+        IErasureCodingProfileStore profiles,
+        IConsoleStore consoleStore,
+        CancellationToken cancellationToken)
+    {
+        var saved = await profiles.SaveErasureCodingProfileAsync(
+            new ErasureCodingProfile(
+                profileId,
+                request.DataShards,
+                request.ParityShards,
+                request.CellSizeBytes,
+                request.Enabled,
+                DateTimeOffset.MinValue,
+                DateTimeOffset.MinValue),
+            cancellationToken);
+        await AppendAuditAsync(
+            consoleStore,
+            Actor(context),
+            "ec-profile.save",
+            saved.ProfileId,
+            "success",
+            $"Data={saved.DataShards}; Parity={saved.ParityShards}; Cell={saved.CellSizeBytes}; Enabled={saved.Enabled}.",
+            cancellationToken);
+        return Results.Ok(saved);
+    }
+
+    private static async Task<IResult> DeleteErasureCodingProfileAsync(
+        HttpContext context,
+        string profileId,
+        IErasureCodingProfileStore profiles,
+        IConsoleStore consoleStore,
+        CancellationToken cancellationToken)
+    {
+        await profiles.DeleteErasureCodingProfileAsync(profileId, cancellationToken);
+        await AppendAuditAsync(consoleStore, Actor(context), "ec-profile.delete", profileId, "success", null, cancellationToken);
+        return Results.NoContent();
     }
 
     private static async Task<IResult> BucketsAsync(IConsoleStore consoleStore, CancellationToken cancellationToken)
@@ -271,6 +404,80 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
         return Results.Ok(settings);
     }
 
+    private static async Task<IResult> GetBucketVersioningAsync(
+        string bucketName,
+        IObjectStore store,
+        CancellationToken cancellationToken)
+    {
+        S3NameValidator.ValidateBucketName(bucketName);
+        return Results.Ok(await store.GetBucketVersioningAsync(bucketName, cancellationToken));
+    }
+
+    private static async Task<IResult> PutBucketVersioningAsync(
+        HttpContext context,
+        string bucketName,
+        BucketVersioningConsoleRequest request,
+        IObjectStore store,
+        IConsoleStore consoleStore,
+        CancellationToken cancellationToken)
+    {
+        S3NameValidator.ValidateBucketName(bucketName);
+        var result = await store.PutBucketVersioningAsync(bucketName, request.Status, cancellationToken);
+        await AppendAuditAsync(consoleStore, Actor(context), "bucket.versioning.put", bucketName, "success", result.Status, cancellationToken);
+        return Results.Ok(result);
+    }
+
+    private static async Task<IResult> GetBucketLifecycleAsync(
+        string bucketName,
+        IObjectStore store,
+        CancellationToken cancellationToken)
+    {
+        S3NameValidator.ValidateBucketName(bucketName);
+        var lifecycle = await store.GetBucketLifecycleAsync(bucketName, cancellationToken)
+            ?? new BucketLifecycleConfiguration([]);
+        return Results.Ok(lifecycle);
+    }
+
+    private static async Task<IResult> PutBucketLifecycleAsync(
+        HttpContext context,
+        string bucketName,
+        BucketLifecycleConsoleRequest request,
+        IObjectStore store,
+        IConsoleStore consoleStore,
+        CancellationToken cancellationToken)
+    {
+        S3NameValidator.ValidateBucketName(bucketName);
+        if (request.Rules is null)
+        {
+            throw new MeansException(MeansErrorCodes.MalformedXML, "Lifecycle rules are required.", 400);
+        }
+
+        var configuration = new BucketLifecycleConfiguration(
+            request.Rules.Select(rule => new LifecycleRule(
+                rule.Id,
+                rule.Status,
+                rule.Prefix ?? "",
+                rule.ExpirationDays,
+                rule.NoncurrentVersionExpirationDays,
+                rule.AbortIncompleteMultipartUploadDays)).ToArray());
+        await store.PutBucketLifecycleAsync(bucketName, configuration, cancellationToken);
+        await AppendAuditAsync(consoleStore, Actor(context), "bucket.lifecycle.put", bucketName, "success", $"{configuration.Rules.Count} rule(s).", cancellationToken);
+        return Results.Ok(configuration);
+    }
+
+    private static async Task<IResult> DeleteBucketLifecycleAsync(
+        HttpContext context,
+        string bucketName,
+        IObjectStore store,
+        IConsoleStore consoleStore,
+        CancellationToken cancellationToken)
+    {
+        S3NameValidator.ValidateBucketName(bucketName);
+        await store.DeleteBucketLifecycleAsync(bucketName, cancellationToken);
+        await AppendAuditAsync(consoleStore, Actor(context), "bucket.lifecycle.delete", bucketName, "success", null, cancellationToken);
+        return Results.NoContent();
+    }
+
     private static async Task<IResult> GetPolicyAsync(string bucketName, IBucketPolicyRepository policies, CancellationToken cancellationToken)
     {
         return Results.Ok(new PolicyResponse(await policies.GetPolicyAsync(bucketName, cancellationToken) ?? ""));
@@ -318,23 +525,48 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
         return Results.Ok(result);
     }
 
-    private static async Task<IResult> HeadObjectAsync(string bucketName, string key, IObjectStore store, CancellationToken cancellationToken)
+    private static async Task<IResult> ListObjectVersionsAsync(
+        string bucketName,
+        string? prefix,
+        string? delimiter,
+        string? keyMarker,
+        string? versionIdMarker,
+        int? maxKeys,
+        IObjectStore store,
+        CancellationToken cancellationToken)
+    {
+        var result = await store.ListObjectVersionsAsync(
+            bucketName,
+            new ListObjectVersionsOptions(prefix, delimiter, keyMarker, versionIdMarker, maxKeys ?? 1000),
+            cancellationToken);
+        return Results.Ok(result);
+    }
+
+    private static async Task<IResult> HeadObjectAsync(string bucketName, string key, string? versionId, IObjectStore store, CancellationToken cancellationToken)
     {
         S3NameValidator.ValidateObjectKey(key);
-        return Results.Ok(await store.HeadObjectAsync(bucketName, key, cancellationToken));
+        return Results.Ok(await store.HeadObjectAsync(bucketName, key, versionId, cancellationToken));
     }
 
     private static async Task<IResult> DeleteObjectAsync(
         HttpContext context,
         string bucketName,
         string key,
+        string? versionId,
         IObjectStore store,
         IConsoleStore consoleStore,
         CancellationToken cancellationToken)
     {
         S3NameValidator.ValidateObjectKey(key);
-        await store.DeleteObjectAsync(bucketName, key, cancellationToken);
-        await AppendAuditAsync(consoleStore, Actor(context), "object.delete", $"{bucketName}/{key}", "success", null, cancellationToken);
+        var deleted = await store.DeleteObjectAsync(bucketName, key, versionId, cancellationToken);
+        await AppendAuditAsync(
+            consoleStore,
+            Actor(context),
+            "object.delete",
+            $"{bucketName}/{key}",
+            "success",
+            deleted.VersionId is null ? null : $"VersionId={deleted.VersionId}; DeleteMarker={deleted.DeleteMarker}.",
+            cancellationToken);
         return Results.NoContent();
     }
 
@@ -351,9 +583,12 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
             new CopyObjectRequest(
                 request.SourceBucket,
                 request.SourceKey,
+                SourceVersionId: null,
                 bucketName,
                 request.DestinationKey,
                 new Dictionary<string, string>(),
+                CopyMetadataDirectives.Copy,
+                ContentType: null,
                 CacheControl: null,
                 ContentDisposition: null),
             cancellationToken);
@@ -472,7 +707,10 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
         IConsoleStore consoleStore,
         CancellationToken cancellationToken)
     {
-        var response = CreatePresignedResponse(context, bucketName, request.Key, HttpMethod.Get, request.ExpiresSeconds, storageOptions.Value);
+        var query = string.IsNullOrWhiteSpace(request.VersionId)
+            ? null
+            : new Dictionary<string, string> { ["versionId"] = request.VersionId };
+        var response = CreatePresignedResponse(context, bucketName, request.Key, HttpMethod.Get, request.ExpiresSeconds, storageOptions.Value, query);
         await AppendAuditAsync(consoleStore, Actor(context), "object.presign-download", $"{bucketName}/{request.Key}", "success", null, cancellationToken);
         return Results.Ok(response);
     }
@@ -626,6 +864,58 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
                 ObjectBytes: objectBytes,
                 UsedPercent: objectBytes > 0 ? 100 : 0);
         }
+    }
+
+    private static DateTimeOffset ClusterOfflineBefore(ClusterOptions options)
+    {
+        return DateTimeOffset.UtcNow.Subtract(TimeSpan.FromSeconds(Math.Max(5, options.OfflineAfterSeconds)));
+    }
+
+    private static IReadOnlyList<DashboardPoolResponse> BuildDashboardPools(
+        ClusterTopology topology,
+        DashboardCapacityResponse fallbackCapacity,
+        long objectBytes,
+        int fallbackDriveCount,
+        int fallbackOnlineDrives)
+    {
+        if (topology.Pools.Count == 0)
+        {
+            return
+            [
+                new DashboardPoolResponse(
+                    "Pool 1",
+                    fallbackCapacity.TotalBytes,
+                    fallbackCapacity.UsedBytes,
+                    fallbackCapacity.FreeBytes,
+                    fallbackCapacity.ObjectBytes,
+                    fallbackDriveCount,
+                    fallbackOnlineDrives,
+                    fallbackDriveCount - fallbackOnlineDrives)
+            ];
+        }
+
+        var disksByPool = topology.Nodes
+            .SelectMany(node => node.Disks)
+            .GroupBy(disk => disk.PoolId, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
+        var singlePoolObjectBytes = topology.Pools.Count == 1 ? objectBytes : 0;
+        return topology.Pools.Select(pool =>
+        {
+            disksByPool.TryGetValue(pool.PoolId, out var disks);
+            disks ??= [];
+            var onlineDrives = disks.Count(disk => disk.Status == StorageDiskStatuses.Online);
+            var totalBytes = Math.Max(0, pool.TotalBytes);
+            var freeBytes = Math.Max(0, pool.AvailableBytes);
+            return new DashboardPoolResponse(
+                pool.Name,
+                totalBytes,
+                Math.Max(0, totalBytes - freeBytes),
+                freeBytes,
+                singlePoolObjectBytes,
+                pool.DiskCount,
+                onlineDrives,
+                pool.DiskCount - onlineDrives);
+        }).ToArray();
     }
 
     private static DashboardPathStatusResponse GetPathStatus(string name, string path, bool isFilePath)
@@ -916,11 +1206,28 @@ public sealed record DashboardPoolResponse(
     int OnlineDrives,
     int OfflineDrives);
 
+public sealed record BackgroundTaskManagementResponse(
+    IReadOnlyList<BackgroundTaskGroup> Groups,
+    IReadOnlyList<BackgroundTaskSnapshot> Tasks,
+    IReadOnlyList<BackgroundTaskRunRecord> History);
+
 public sealed record CreateBucketRequest(string BucketName);
 
 public sealed record UpdateBucketSettingsRequest(
     IReadOnlyDictionary<string, string>? DefaultResponseHeaders,
     IReadOnlyDictionary<string, string>? DefaultMetadata);
+
+public sealed record BucketVersioningConsoleRequest(string Status);
+
+public sealed record BucketLifecycleConsoleRequest(IReadOnlyList<LifecycleRuleConsoleRequest> Rules);
+
+public sealed record LifecycleRuleConsoleRequest(
+    string Id,
+    string Status,
+    string? Prefix,
+    int? ExpirationDays,
+    int? NoncurrentVersionExpirationDays,
+    int? AbortIncompleteMultipartUploadDays);
 
 public sealed record PolicyRequest(string Policy);
 
@@ -928,7 +1235,7 @@ public sealed record PolicyResponse(string Policy);
 
 public sealed record CopyObjectConsoleRequest(string SourceBucket, string SourceKey, string DestinationKey);
 
-public sealed record PresignRequest(string Key, int? ExpiresSeconds);
+public sealed record PresignRequest(string Key, int? ExpiresSeconds, string? VersionId = null);
 
 public sealed record PresignedTransferResponse(string Method, string Url, int ExpiresSeconds);
 
@@ -966,3 +1273,9 @@ public sealed record SystemSettingsResponse(
             SystemSettings.MaximumMaxUploadSizeBytes);
     }
 }
+
+public sealed record SaveErasureCodingProfileRequest(
+    int DataShards,
+    int ParityShards,
+    int CellSizeBytes,
+    bool Enabled);

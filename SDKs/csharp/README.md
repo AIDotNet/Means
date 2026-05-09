@@ -47,14 +47,23 @@ await download.Content.CopyToAsync(file);
 - `MeansCredentials`
 - `BucketSummary`
 - `ObjectSummary`
+- `BucketVersioningResult`
+- `ListObjectVersionsResult`
+- `BucketLifecycleConfiguration`
 - `ObjectHeadResult`
 - `PutObjectResult`
+- `DeleteObjectResult`
 - `CopyObjectResult`
+- `CopyObjectOptions`
+- `ObjectTaggingResult`
+- `BucketXmlConfigurationResult`
 - `MultipartUploadResult`
 - `UploadPartResult`
+- `CopyPartResult`
 - `CompleteMultipartUploadResult`
 - `ListPartsResult`
 - `ListMultipartUploadsResult`
+- `ListMultipartUploadsOptions`
 - `PresignedRequest`
 - `MeansError`
 
@@ -64,14 +73,30 @@ await download.Content.CopyToAsync(file);
 - `CreateBucketAsync`
 - `HeadBucketAsync`
 - `DeleteBucketAsync`
+- `GetBucketVersioningAsync`
+- `SetBucketVersioningAsync`
+- `ListObjectVersionsAsync`
+- `GetBucketLifecycleAsync`
+- `PutBucketLifecycleAsync`
+- `DeleteBucketLifecycleAsync`
+- `GetBucketCorsAsync`
+- `PutBucketCorsAsync`
+- `DeleteBucketCorsAsync`
+- `GetBucketNotificationAsync`
+- `PutBucketNotificationAsync`
+- `DeleteBucketNotificationAsync`
 - `ListObjectsAsync`
 - `PutObjectAsync`
 - `GetObjectAsync`
 - `HeadObjectAsync`
 - `DeleteObjectAsync`
 - `CopyObjectAsync`
+- `GetObjectTaggingAsync`
+- `PutObjectTaggingAsync`
+- `DeleteObjectTaggingAsync`
 - `InitiateMultipartUploadAsync`
 - `UploadPartAsync`
+- `UploadPartCopyAsync`
 - `CompleteMultipartUploadAsync`
 - `AbortMultipartUploadAsync`
 - `ListPartsAsync`
@@ -96,7 +121,50 @@ var completed = await client.UploadObjectMultipartAsync(
 Console.WriteLine(completed.ETag);
 ```
 
-The high-level helper requires a readable, seekable stream, uses 16 MiB parts by default, and aborts the upload if a part or completion fails. Low-level multipart methods are available when callers need custom scheduling or presigned part URLs.
+The high-level helper requires a readable, seekable stream, uses 16 MiB parts by default, and aborts the upload if a part or completion fails. Low-level multipart methods are available when callers need custom scheduling, `UploadPartCopy`, pagination, or presigned part URLs.
+
+## Versioning and lifecycle
+
+```csharp
+await client.SetBucketVersioningAsync("photos", "Enabled");
+var versions = await client.ListObjectVersionsAsync("photos", prefix: "2026/");
+await using var oldVersion = await client.GetObjectAsync("photos", "2026/image.jpg", versions.Versions[0].VersionId);
+
+await client.PutBucketLifecycleAsync("photos", new BucketLifecycleConfiguration
+{
+    Rules =
+    {
+        new LifecycleRule
+        {
+            Id = "expire-logs",
+            Status = "Enabled",
+            Prefix = "logs/",
+            ExpirationDays = 30,
+            NoncurrentVersionExpirationDays = 7,
+            AbortIncompleteMultipartUploadDays = 1
+        }
+    }
+});
+```
+
+Lifecycle day values must be positive integers. Empty lifecycle configurations are rejected; use `DeleteBucketLifecycleAsync` to remove rules.
+
+## Tagging, CORS, and notification
+
+```csharp
+await client.PutObjectTaggingAsync(
+    "photos",
+    "2026/image.jpg",
+    new Dictionary<string, string> { ["kind"] = "raw" });
+
+var tags = await client.GetObjectTaggingAsync("photos", "2026/image.jpg");
+
+await client.PutBucketCorsAsync(
+    "photos",
+    "<CORSConfiguration><CORSRule><AllowedOrigin>*</AllowedOrigin><AllowedMethod>GET</AllowedMethod></CORSRule></CORSConfiguration>");
+```
+
+Bucket CORS and notification methods use raw XML so callers can pass through S3-compatible configuration variants without waiting for SDK model updates.
 
 ## Presigned URLs
 
@@ -105,6 +173,12 @@ var presignedGet = client.CreatePresignedGetUrl(
     "photos",
     "2026/image.jpg",
     TimeSpan.FromMinutes(15));
+
+var versionedGet = client.CreatePresignedGetUrl(
+    "photos",
+    "2026/image.jpg",
+    versionId: "object-version-id",
+    expires: TimeSpan.FromMinutes(15));
 
 Console.WriteLine(presignedGet.Url);
 ```

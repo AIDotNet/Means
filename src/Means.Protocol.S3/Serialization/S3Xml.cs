@@ -62,6 +62,62 @@ public static class S3Xml
         return document.ToString(SaveOptions.DisableFormatting);
     }
 
+    public static string CopyPartResult(MultipartPartInfo part)
+    {
+        var document = new XDocument(
+            new XElement(S3Ns + "CopyPartResult",
+                new XElement(S3Ns + "LastModified", FormatDate(part.LastModified)),
+                new XElement(S3Ns + "ETag", QuoteEtag(part.ETag))));
+
+        return document.ToString(SaveOptions.DisableFormatting);
+    }
+
+    public static string BucketVersioning(BucketVersioningInfo info)
+    {
+        var document = new XDocument(
+            new XElement(S3Ns + "VersioningConfiguration",
+                string.Equals(info.Status, BucketVersioningStatuses.Off, StringComparison.Ordinal)
+                    ? null
+                    : new XElement(S3Ns + "Status", info.Status)));
+
+        return document.ToString(SaveOptions.DisableFormatting);
+    }
+
+    public static string ObjectTagging(ObjectTagSet tagSet)
+    {
+        var document = new XDocument(
+            new XElement(S3Ns + "Tagging",
+                new XElement(S3Ns + "TagSet",
+                    tagSet.Tags.Select(tag =>
+                        new XElement(S3Ns + "Tag",
+                            new XElement(S3Ns + "Key", tag.Key),
+                            new XElement(S3Ns + "Value", tag.Value))))));
+
+        return document.ToString(SaveOptions.DisableFormatting);
+    }
+
+    public static string BucketLifecycle(BucketLifecycleConfiguration configuration)
+    {
+        var document = new XDocument(
+            new XElement(S3Ns + "LifecycleConfiguration",
+                configuration.Rules.Select(rule =>
+                    new XElement(S3Ns + "Rule",
+                        new XElement(S3Ns + "ID", rule.Id),
+                        new XElement(S3Ns + "Status", rule.Status),
+                        new XElement(S3Ns + "Filter", new XElement(S3Ns + "Prefix", rule.Prefix)),
+                        rule.ExpirationDays is null
+                            ? null
+                            : new XElement(S3Ns + "Expiration", new XElement(S3Ns + "Days", rule.ExpirationDays.Value)),
+                        rule.NoncurrentVersionExpirationDays is null
+                            ? null
+                            : new XElement(S3Ns + "NoncurrentVersionExpiration", new XElement(S3Ns + "NoncurrentDays", rule.NoncurrentVersionExpirationDays.Value)),
+                        rule.AbortIncompleteMultipartUploadDays is null
+                            ? null
+                            : new XElement(S3Ns + "AbortIncompleteMultipartUpload", new XElement(S3Ns + "DaysAfterInitiation", rule.AbortIncompleteMultipartUploadDays.Value))))));
+
+        return document.ToString(SaveOptions.DisableFormatting);
+    }
+
     public static string InitiateMultipartUploadResult(MultipartUploadInfo upload)
     {
         var document = new XDocument(
@@ -93,10 +149,10 @@ public static class S3Xml
                 new XElement(S3Ns + "Key", result.Key),
                 new XElement(S3Ns + "UploadId", result.UploadId),
                 new XElement(S3Ns + "StorageClass", "STANDARD"),
-                new XElement(S3Ns + "PartNumberMarker", 0),
-                new XElement(S3Ns + "NextPartNumberMarker", 0),
-                new XElement(S3Ns + "MaxParts", 10000),
-                new XElement(S3Ns + "IsTruncated", "false"),
+                new XElement(S3Ns + "PartNumberMarker", result.PartNumberMarker),
+                new XElement(S3Ns + "NextPartNumberMarker", result.NextPartNumberMarker),
+                new XElement(S3Ns + "MaxParts", result.MaxParts),
+                new XElement(S3Ns + "IsTruncated", result.IsTruncated.ToString().ToLowerInvariant()),
                 result.Parts.Select(part =>
                     new XElement(S3Ns + "Part",
                         new XElement(S3Ns + "PartNumber", part.PartNumber),
@@ -117,6 +173,7 @@ public static class S3Xml
                 result.NextKeyMarker is null ? null : new XElement(S3Ns + "NextKeyMarker", result.NextKeyMarker),
                 result.NextUploadIdMarker is null ? null : new XElement(S3Ns + "NextUploadIdMarker", result.NextUploadIdMarker),
                 new XElement(S3Ns + "Prefix", result.Prefix ?? ""),
+                new XElement(S3Ns + "Delimiter", result.Delimiter ?? ""),
                 new XElement(S3Ns + "MaxUploads", result.MaxUploads),
                 new XElement(S3Ns + "IsTruncated", result.IsTruncated.ToString().ToLowerInvariant()),
                 result.Uploads.Select(upload =>
@@ -124,7 +181,43 @@ public static class S3Xml
                         new XElement(S3Ns + "Key", upload.Key),
                         new XElement(S3Ns + "UploadId", upload.UploadId),
                         new XElement(S3Ns + "StorageClass", "STANDARD"),
-                        new XElement(S3Ns + "Initiated", FormatDate(upload.InitiatedAt))))));
+                        new XElement(S3Ns + "Initiated", FormatDate(upload.InitiatedAt)))),
+                result.CommonPrefixes.Select(prefix =>
+                    new XElement(S3Ns + "CommonPrefixes", new XElement(S3Ns + "Prefix", prefix)))));
+
+        return document.ToString(SaveOptions.DisableFormatting);
+    }
+
+    public static string ListObjectVersions(ListObjectVersionsResult result)
+    {
+        var document = new XDocument(
+            new XElement(S3Ns + "ListVersionsResult",
+                new XElement(S3Ns + "Name", result.BucketName),
+                new XElement(S3Ns + "Prefix", result.Prefix ?? ""),
+                new XElement(S3Ns + "KeyMarker", result.KeyMarker ?? ""),
+                new XElement(S3Ns + "VersionIdMarker", result.VersionIdMarker ?? ""),
+                result.NextKeyMarker is null ? null : new XElement(S3Ns + "NextKeyMarker", result.NextKeyMarker),
+                result.NextVersionIdMarker is null ? null : new XElement(S3Ns + "NextVersionIdMarker", result.NextVersionIdMarker),
+                new XElement(S3Ns + "MaxKeys", result.MaxKeys),
+                new XElement(S3Ns + "Delimiter", result.Delimiter ?? ""),
+                new XElement(S3Ns + "IsTruncated", result.IsTruncated.ToString().ToLowerInvariant()),
+                result.Versions.Select(version =>
+                    version.IsDeleteMarker
+                        ? new XElement(S3Ns + "DeleteMarker",
+                            new XElement(S3Ns + "Key", version.Key),
+                            new XElement(S3Ns + "VersionId", version.VersionId),
+                            new XElement(S3Ns + "IsLatest", version.IsLatest.ToString().ToLowerInvariant()),
+                            new XElement(S3Ns + "LastModified", FormatDate(version.LastModified)))
+                        : new XElement(S3Ns + "Version",
+                            new XElement(S3Ns + "Key", version.Key),
+                            new XElement(S3Ns + "VersionId", version.VersionId),
+                            new XElement(S3Ns + "IsLatest", version.IsLatest.ToString().ToLowerInvariant()),
+                            new XElement(S3Ns + "LastModified", FormatDate(version.LastModified)),
+                            new XElement(S3Ns + "ETag", QuoteEtag(version.ETag)),
+                            new XElement(S3Ns + "Size", version.Size),
+                            new XElement(S3Ns + "StorageClass", "STANDARD"))),
+                result.CommonPrefixes.Select(prefix =>
+                    new XElement(S3Ns + "CommonPrefixes", new XElement(S3Ns + "Prefix", prefix)))));
 
         return document.ToString(SaveOptions.DisableFormatting);
     }

@@ -55,6 +55,40 @@ operations:
     method: DELETE
     path: "/{bucket}"
     auth: signed
+  getBucketVersioning:
+    method: GET
+    path: "/{bucket}"
+    query:
+      versioning: ""
+    auth: signed
+    responseXml: VersioningConfiguration
+  putBucketVersioning:
+    method: PUT
+    path: "/{bucket}"
+    query:
+      versioning: ""
+    auth: signed
+    requestXml: VersioningConfiguration
+  getBucketLifecycle:
+    method: GET
+    path: "/{bucket}"
+    query:
+      lifecycle: ""
+    auth: signed
+    responseXml: LifecycleConfiguration
+  putBucketLifecycle:
+    method: PUT
+    path: "/{bucket}"
+    query:
+      lifecycle: ""
+    auth: signed
+    requestXml: LifecycleConfiguration
+  deleteBucketLifecycle:
+    method: DELETE
+    path: "/{bucket}"
+    query:
+      lifecycle: ""
+    auth: signed
   listObjects:
     method: GET
     path: "/{bucket}"
@@ -66,6 +100,18 @@ operations:
       max-keys: optional
     auth: signed-or-policy
     responseXml: ListBucketResult
+  listObjectVersions:
+    method: GET
+    path: "/{bucket}"
+    query:
+      versions: ""
+      prefix: optional
+      delimiter: optional
+      key-marker: optional
+      version-id-marker: optional
+      max-keys: optional
+    auth: signed-or-policy
+    responseXml: ListVersionsResult
   putObject:
     method: PUT
     path: "/{bucket}/{key}"
@@ -80,6 +126,8 @@ operations:
   getObject:
     method: GET
     path: "/{bucket}/{key}"
+    query:
+      versionId: optional
     auth: signed-or-policy
     responseHeaders:
       ETag: required
@@ -93,6 +141,8 @@ operations:
   headObject:
     method: HEAD
     path: "/{bucket}/{key}"
+    query:
+      versionId: optional
     auth: signed-or-policy
     responseHeaders:
       ETag: required
@@ -104,6 +154,31 @@ operations:
   deleteObject:
     method: DELETE
     path: "/{bucket}/{key}"
+    query:
+      versionId: optional
+    auth: signed-or-policy
+  getObjectTagging:
+    method: GET
+    path: "/{bucket}/{key}"
+    query:
+      tagging: ""
+      versionId: optional
+    auth: signed-or-policy
+    responseXml: Tagging
+  putObjectTagging:
+    method: PUT
+    path: "/{bucket}/{key}"
+    query:
+      tagging: ""
+      versionId: optional
+    auth: signed-or-policy
+    requestXml: Tagging
+  deleteObjectTagging:
+    method: DELETE
+    path: "/{bucket}/{key}"
+    query:
+      tagging: ""
+      versionId: optional
     auth: signed-or-policy
   copyObject:
     method: PUT
@@ -111,7 +186,52 @@ operations:
     auth: signed-or-policy
     requestHeaders:
       x-amz-copy-source: required
+      x-amz-metadata-directive: optional
+      Content-Type: optional
+      Cache-Control: optional
+      Content-Disposition: optional
+      x-amz-meta-*: optional
     responseXml: CopyObjectResult
+  getBucketCors:
+    method: GET
+    path: "/{bucket}"
+    query:
+      cors: ""
+    auth: signed-or-policy
+    responseXml: CORSConfiguration
+  putBucketCors:
+    method: PUT
+    path: "/{bucket}"
+    query:
+      cors: ""
+    auth: signed
+    requestXml: CORSConfiguration
+  deleteBucketCors:
+    method: DELETE
+    path: "/{bucket}"
+    query:
+      cors: ""
+    auth: signed
+  getBucketNotification:
+    method: GET
+    path: "/{bucket}"
+    query:
+      notification: ""
+    auth: signed-or-policy
+    responseXml: NotificationConfiguration
+  putBucketNotification:
+    method: PUT
+    path: "/{bucket}"
+    query:
+      notification: ""
+    auth: signed
+    requestXml: NotificationConfiguration
+  deleteBucketNotification:
+    method: DELETE
+    path: "/{bucket}"
+    query:
+      notification: ""
+    auth: signed
   initiateMultipartUpload:
     method: POST
     path: "/{bucket}/{key}"
@@ -133,6 +253,17 @@ operations:
     auth: signed-or-policy
     responseHeaders:
       ETag: required
+  uploadPartCopy:
+    method: PUT
+    path: "/{bucket}/{key}"
+    query:
+      partNumber: required
+      uploadId: required
+    auth: signed-or-policy
+    requestHeaders:
+      x-amz-copy-source: required
+      x-amz-copy-source-range: optional
+    responseXml: CopyPartResult
   completeMultipartUpload:
     method: POST
     path: "/{bucket}/{key}"
@@ -152,6 +283,8 @@ operations:
     path: "/{bucket}/{key}"
     query:
       uploadId: required
+      part-number-marker: optional
+      max-parts: optional
     auth: signed-or-policy
     responseXml: ListPartsResult
   listMultipartUploads:
@@ -160,6 +293,7 @@ operations:
     query:
       uploads: ""
       prefix: optional
+      delimiter: optional
       key-marker: optional
       upload-id-marker: optional
       max-uploads: optional
@@ -168,6 +302,8 @@ operations:
   createPresignedGetUrl:
     method: GET
     path: "/{bucket}/{key}"
+    query:
+      versionId: optional
     auth: local-signing
   createPresignedPutUrl:
     method: PUT
@@ -193,8 +329,12 @@ errors:
   - InvalidRequest
   - MalformedXML
   - NoSuchBucket
+  - NoSuchCORSConfiguration
+  - NoSuchLifecycleConfiguration
   - NoSuchKey
   - NoSuchUpload
+  - NoSuchVersion
+  - PreconditionFailed
   - SignatureDoesNotMatch
 multipartUpload:
   partNumber:
@@ -203,8 +343,17 @@ multipartUpload:
   minimumNonFinalPartBytes: 5242880
   defaultSdkPartBytes: 16777216
   etag: "md5(concat(part-md5-bytes))-part-count"
-  unsupported:
-    - uploadPartCopy
+versioning:
+  statuses:
+    - Off
+    - Enabled
+    - Suspended
+  deleteMarker: true
+lifecycle:
+  supportedRules:
+    - Expiration.Days
+    - NoncurrentVersionExpiration.NoncurrentDays
+    - AbortIncompleteMultipartUpload.DaysAfterInitiation
 bucketPolicy:
   jsonShape:
     Version: optional
@@ -216,6 +365,13 @@ bucketPolicy:
         - s3:GetObject
         - s3:PutObject
         - s3:DeleteObject
+        - s3:GetObjectTagging
+        - s3:PutObjectTagging
+        - s3:DeleteObjectTagging
+        - s3:GetBucketCORS
+        - s3:PutBucketCORS
+        - s3:GetBucketNotification
+        - s3:PutBucketNotification
         - s3:AbortMultipartUpload
         - s3:ListMultipartUploadParts
       Resource:

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Xml.Linq;
 using Means.Core;
 using Means.Protocol.S3;
 using Microsoft.Extensions.Options;
@@ -34,6 +35,12 @@ public static class S3Endpoint
             address = S3AddressResolver.Resolve(context.Request, addressingOptions.Value);
             isListOperation = IsListOperation(context, address);
             var authorizer = new S3RequestAuthorizer(accessKeys, policies, policyEvaluator, verifier);
+
+            if (HttpMethods.IsOptions(context.Request.Method) && address.BucketName is not null)
+            {
+                await HandleCorsPreflightAsync(context, store, address.BucketName, cancellationToken);
+                return;
+            }
 
             if (address.BucketName is not null && context.Request.Query.ContainsKey("policy"))
             {
@@ -95,6 +102,77 @@ public static class S3Endpoint
         }
 
         return context.Request.Query.ContainsKey("uploadId");
+    }
+
+    private static async Task HandleCorsPreflightAsync(
+        HttpContext context,
+        IObjectStore store,
+        string bucketName,
+        CancellationToken cancellationToken)
+    {
+        var origin = context.Request.Headers.Origin.ToString();
+        var requestedMethod = context.Request.Headers.AccessControlRequestMethod.ToString();
+        if (string.IsNullOrWhiteSpace(origin) || string.IsNullOrWhiteSpace(requestedMethod))
+        {
+            context.Response.StatusCode = StatusCodes.Status204NoContent;
+            return;
+        }
+
+        var configuration = await store.GetBucketCorsAsync(bucketName, cancellationToken);
+        if (configuration is null || !TryMatchCorsRule(configuration.Xml, origin, requestedMethod, out var allowedHeaders, out var exposeHeaders, out var maxAge))
+        {
+            throw new MeansException(MeansErrorCodes.AccessDenied, "CORS is not enabled for this origin or method.", 403);
+        }
+
+        context.Response.StatusCode = StatusCodes.Status200OK;
+        context.Response.Headers.AccessControlAllowOrigin = origin;
+        context.Response.Headers.AccessControlAllowMethods = requestedMethod;
+        if (!string.IsNullOrWhiteSpace(allowedHeaders))
+        {
+            context.Response.Headers.AccessControlAllowHeaders = allowedHeaders;
+        }
+
+        if (!string.IsNullOrWhiteSpace(exposeHeaders))
+        {
+            context.Response.Headers.AccessControlExposeHeaders = exposeHeaders;
+        }
+
+        if (maxAge is not null)
+        {
+            context.Response.Headers.AccessControlMaxAge = maxAge.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+    }
+
+    private static bool TryMatchCorsRule(
+        string xml,
+        string origin,
+        string method,
+        out string allowedHeaders,
+        out string exposeHeaders,
+        out int? maxAge)
+    {
+        allowedHeaders = "";
+        exposeHeaders = "";
+        maxAge = null;
+        var document = XDocument.Parse(xml);
+        foreach (var rule in document.Root?.Elements().Where(element => element.Name.LocalName == "CORSRule") ?? [])
+        {
+            var origins = rule.Elements().Where(element => element.Name.LocalName == "AllowedOrigin").Select(element => element.Value).ToArray();
+            var methods = rule.Elements().Where(element => element.Name.LocalName == "AllowedMethod").Select(element => element.Value).ToArray();
+            if (!origins.Any(value => value == "*" || string.Equals(value, origin, StringComparison.OrdinalIgnoreCase))
+                || !methods.Any(value => string.Equals(value, method, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            allowedHeaders = string.Join(", ", rule.Elements().Where(element => element.Name.LocalName == "AllowedHeader").Select(element => element.Value));
+            exposeHeaders = string.Join(", ", rule.Elements().Where(element => element.Name.LocalName == "ExposeHeader").Select(element => element.Value));
+            var maxAgeValue = rule.Elements().FirstOrDefault(element => element.Name.LocalName == "MaxAgeSeconds")?.Value;
+            maxAge = int.TryParse(maxAgeValue, out var parsed) ? parsed : null;
+            return true;
+        }
+
+        return false;
     }
 
     private static async Task TryRecordMetricAsync(

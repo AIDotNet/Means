@@ -319,6 +319,219 @@ public sealed class S3EndpointTests
         Assert.Contains("<Code>SignatureDoesNotMatch</Code>", await tamperedResponse.Content.ReadAsStringAsync());
     }
 
+    [Fact]
+    public async Task VersioningTaggingAndConditionalHeadersFollowS3Semantics()
+    {
+        await using var factory = new MeansWebApplicationFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://api.means.local")
+        });
+
+        var credentials = new SigV4SigningCredentials("meansadmin", "meansadminsecret");
+        await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/versioned"), credentials);
+        var putVersioning = new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/versioned?versioning")
+        {
+            Content = new StringContent("<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>", Encoding.UTF8, "application/xml")
+        };
+        Assert.Equal(HttpStatusCode.OK, (await SendSignedAsync(client, putVersioning, credentials)).StatusCode);
+
+        var firstPut = await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/versioned/doc.txt")
+        {
+            Content = new StringContent("first", Encoding.UTF8, "text/plain")
+        }, credentials);
+        var firstVersion = firstPut.Headers.GetValues("x-amz-version-id").Single();
+        var firstEtag = firstPut.Headers.ETag?.Tag ?? throw new InvalidOperationException("Missing ETag.");
+
+        var secondPut = await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/versioned/doc.txt")
+        {
+            Content = new StringContent("second", Encoding.UTF8, "text/plain")
+        }, credentials);
+        var secondVersion = secondPut.Headers.GetValues("x-amz-version-id").Single();
+        Assert.NotEqual(firstVersion, secondVersion);
+
+        var oldVersion = await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Get, $"https://api.means.local/versioned/doc.txt?versionId={firstVersion}"), credentials);
+        Assert.Equal(HttpStatusCode.OK, oldVersion.StatusCode);
+        Assert.Equal("first", await oldVersion.Content.ReadAsStringAsync());
+
+        var notModified = new HttpRequestMessage(HttpMethod.Get, $"https://api.means.local/versioned/doc.txt?versionId={firstVersion}");
+        notModified.Headers.TryAddWithoutValidation("If-None-Match", firstEtag);
+        Assert.Equal(HttpStatusCode.NotModified, (await SendSignedAsync(client, notModified, credentials)).StatusCode);
+
+        var failedMatch = new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/versioned/doc.txt");
+        failedMatch.Headers.TryAddWithoutValidation("If-Match", "\"00000000000000000000000000000000\"");
+        var failedMatchResponse = await SendSignedAsync(client, failedMatch, credentials);
+        Assert.Equal(HttpStatusCode.PreconditionFailed, failedMatchResponse.StatusCode);
+
+        var noOverwrite = new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/versioned/doc.txt")
+        {
+            Content = new StringContent("blocked", Encoding.UTF8, "text/plain")
+        };
+        noOverwrite.Headers.TryAddWithoutValidation("If-None-Match", "*");
+        Assert.Equal(HttpStatusCode.PreconditionFailed, (await SendSignedAsync(client, noOverwrite, credentials)).StatusCode);
+
+        var putTags = new HttpRequestMessage(HttpMethod.Put, $"https://api.means.local/versioned/doc.txt?tagging&versionId={firstVersion}")
+        {
+            Content = new StringContent("<Tagging><TagSet><Tag><Key>kind</Key><Value>old</Value></Tag></TagSet></Tagging>", Encoding.UTF8, "application/xml")
+        };
+        Assert.Equal(HttpStatusCode.OK, (await SendSignedAsync(client, putTags, credentials)).StatusCode);
+        var getTags = await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Get, $"https://api.means.local/versioned/doc.txt?tagging&versionId={firstVersion}"), credentials);
+        Assert.Equal(HttpStatusCode.OK, getTags.StatusCode);
+        Assert.Contains("<Key>kind</Key><Value>old</Value>", await getTags.Content.ReadAsStringAsync());
+
+        var deleteCurrent = await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Delete, "https://api.means.local/versioned/doc.txt"), credentials);
+        Assert.Equal(HttpStatusCode.NoContent, deleteCurrent.StatusCode);
+        Assert.Equal("true", deleteCurrent.Headers.GetValues("x-amz-delete-marker").Single());
+        var deleteMarkerVersion = deleteCurrent.Headers.GetValues("x-amz-version-id").Single();
+
+        var listVersions = await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/versioned?versions&prefix=doc.txt&max-keys=2"), credentials);
+        Assert.Equal(HttpStatusCode.OK, listVersions.StatusCode);
+        var listVersionsXml = await listVersions.Content.ReadAsStringAsync();
+        Assert.Contains("<DeleteMarker><Key>doc.txt</Key><VersionId>" + deleteMarkerVersion + "</VersionId><IsLatest>true</IsLatest>", listVersionsXml);
+        Assert.Contains("<VersionId>" + secondVersion + "</VersionId><IsLatest>false</IsLatest>", listVersionsXml);
+        Assert.Contains("<IsTruncated>true</IsTruncated>", listVersionsXml);
+        Assert.Contains("<NextKeyMarker>doc.txt</NextKeyMarker>", listVersionsXml);
+
+        var listVersionsNext = await SendSignedAsync(
+            client,
+            new HttpRequestMessage(HttpMethod.Get, $"https://api.means.local/versioned?versions&prefix=doc.txt&key-marker=doc.txt&version-id-marker={secondVersion}"),
+            credentials);
+        Assert.Equal(HttpStatusCode.OK, listVersionsNext.StatusCode);
+        var listVersionsNextXml = await listVersionsNext.Content.ReadAsStringAsync();
+        Assert.Contains("<VersionId>" + firstVersion + "</VersionId><IsLatest>false</IsLatest>", listVersionsNextXml);
+        Assert.DoesNotContain("<VersionId>" + secondVersion + "</VersionId>", listVersionsNextXml);
+
+        var currentAfterDelete = await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/versioned/doc.txt"), credentials);
+        Assert.Equal(HttpStatusCode.NotFound, currentAfterDelete.StatusCode);
+        var oldAfterDelete = await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Get, $"https://api.means.local/versioned/doc.txt?versionId={secondVersion}"), credentials);
+        Assert.Equal(HttpStatusCode.OK, oldAfterDelete.StatusCode);
+
+        var removeDeleteMarker = await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Delete, $"https://api.means.local/versioned/doc.txt?versionId={deleteMarkerVersion}"), credentials);
+        Assert.Equal(HttpStatusCode.NoContent, removeDeleteMarker.StatusCode);
+        var restoredCurrent = await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/versioned/doc.txt"), credentials);
+        Assert.Equal(HttpStatusCode.OK, restoredCurrent.StatusCode);
+        Assert.Equal("second", await restoredCurrent.Content.ReadAsStringAsync());
+
+        Assert.Equal(HttpStatusCode.OK, (await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/versioned/folder/a.txt")
+        {
+            Content = new StringContent("nested", Encoding.UTF8, "text/plain")
+        }, credentials)).StatusCode);
+        var versionsWithDelimiter = await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/versioned?versions&delimiter=/"), credentials);
+        Assert.Equal(HttpStatusCode.OK, versionsWithDelimiter.StatusCode);
+        Assert.Contains("<CommonPrefixes><Prefix>folder/</Prefix></CommonPrefixes>", await versionsWithDelimiter.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task CopyObjectMetadataDirectiveAndUploadPartCopyWork()
+    {
+        await using var factory = new MeansWebApplicationFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://api.means.local")
+        });
+
+        var credentials = new SigV4SigningCredentials("meansadmin", "meansadminsecret");
+        await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/copyplus"), credentials);
+        var putSource = new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/copyplus/source.txt")
+        {
+            Content = new StringContent("copy-source-body", Encoding.UTF8, "text/plain")
+        };
+        putSource.Headers.TryAddWithoutValidation("x-amz-meta-original", "yes");
+        Assert.Equal(HttpStatusCode.OK, (await SendSignedAsync(client, putSource, credentials)).StatusCode);
+
+        var copyReplace = new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/copyplus/replaced.txt");
+        copyReplace.Headers.TryAddWithoutValidation("x-amz-copy-source", "/copyplus/source.txt");
+        copyReplace.Headers.TryAddWithoutValidation("x-amz-metadata-directive", "REPLACE");
+        copyReplace.Headers.TryAddWithoutValidation("x-amz-meta-replaced", "true");
+        copyReplace.Content = new ByteArrayContent([]);
+        copyReplace.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+        Assert.Equal(HttpStatusCode.OK, (await SendSignedAsync(client, copyReplace, credentials)).StatusCode);
+        var copied = await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/copyplus/replaced.txt"), credentials);
+        Assert.Equal("copy-source-body", await copied.Content.ReadAsStringAsync());
+        Assert.Equal("true", copied.Headers.GetValues("x-amz-meta-replaced").Single());
+        Assert.False(copied.Headers.Contains("x-amz-meta-original"));
+
+        var uploadId = await InitiateMultipartAsync(client, credentials, "copyplus", "assembled.txt");
+        var partCopy = new HttpRequestMessage(HttpMethod.Put, $"https://api.means.local/copyplus/assembled.txt?partNumber=1&uploadId={Uri.EscapeDataString(uploadId)}");
+        partCopy.Headers.TryAddWithoutValidation("x-amz-copy-source", "/copyplus/source.txt");
+        partCopy.Headers.TryAddWithoutValidation("x-amz-copy-source-range", "bytes=0-3");
+        var partCopyResponse = await SendSignedAsync(client, partCopy, credentials);
+        Assert.Equal(HttpStatusCode.OK, partCopyResponse.StatusCode);
+        var partEtag = ReadXmlTag(await partCopyResponse.Content.ReadAsStringAsync(), "ETag")!.Trim('"');
+
+        var complete = await CompleteMultipartAsync(client, credentials, "copyplus", "assembled.txt", uploadId, (1, partEtag));
+        Assert.Equal(HttpStatusCode.OK, complete.StatusCode);
+        var assembled = await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/copyplus/assembled.txt"), credentials);
+        Assert.Equal("copy", await assembled.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task BucketCorsLifecycleAndNotificationSubresourcesRoundTrip()
+    {
+        await using var factory = new MeansWebApplicationFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://api.means.local")
+        });
+
+        var credentials = new SigV4SigningCredentials("meansadmin", "meansadminsecret");
+        await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/controls"), credentials);
+
+        var corsXml = """
+            <CORSConfiguration>
+              <CORSRule>
+                <AllowedOrigin>https://console.example</AllowedOrigin>
+                <AllowedMethod>PUT</AllowedMethod>
+                <AllowedHeader>*</AllowedHeader>
+                <ExposeHeader>ETag</ExposeHeader>
+                <MaxAgeSeconds>600</MaxAgeSeconds>
+              </CORSRule>
+            </CORSConfiguration>
+            """;
+        var putCors = new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/controls?cors")
+        {
+            Content = new StringContent(corsXml, Encoding.UTF8, "application/xml")
+        };
+        Assert.Equal(HttpStatusCode.OK, (await SendSignedAsync(client, putCors, credentials)).StatusCode);
+        var preflight = new HttpRequestMessage(HttpMethod.Options, "https://api.means.local/controls/object.txt");
+        preflight.Headers.TryAddWithoutValidation("Origin", "https://console.example");
+        preflight.Headers.TryAddWithoutValidation("Access-Control-Request-Method", "PUT");
+        var preflightResponse = await client.SendAsync(preflight);
+        Assert.Equal(HttpStatusCode.OK, preflightResponse.StatusCode);
+        Assert.Equal("https://console.example", preflightResponse.Headers.GetValues("Access-Control-Allow-Origin").Single());
+
+        var lifecycleXml = """
+            <LifecycleConfiguration>
+              <Rule>
+                <ID>expire-temp</ID>
+                <Status>Enabled</Status>
+                <Filter><Prefix>tmp/</Prefix></Filter>
+                <Expiration><Days>1</Days></Expiration>
+                <NoncurrentVersionExpiration><NoncurrentDays>1</NoncurrentDays></NoncurrentVersionExpiration>
+                <AbortIncompleteMultipartUpload><DaysAfterInitiation>1</DaysAfterInitiation></AbortIncompleteMultipartUpload>
+              </Rule>
+            </LifecycleConfiguration>
+            """;
+        var putLifecycle = new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/controls?lifecycle")
+        {
+            Content = new StringContent(lifecycleXml, Encoding.UTF8, "application/xml")
+        };
+        Assert.Equal(HttpStatusCode.OK, (await SendSignedAsync(client, putLifecycle, credentials)).StatusCode);
+        var getLifecycle = await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/controls?lifecycle"), credentials);
+        Assert.Equal(HttpStatusCode.OK, getLifecycle.StatusCode);
+        Assert.Contains("<ID>expire-temp</ID>", await getLifecycle.Content.ReadAsStringAsync());
+
+        var notificationXml = "<NotificationConfiguration><TopicConfiguration><Id>reserve</Id><Topic>arn:means:topic</Topic><Event>s3:ObjectCreated:*</Event></TopicConfiguration></NotificationConfiguration>";
+        var putNotification = new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/controls?notification")
+        {
+            Content = new StringContent(notificationXml, Encoding.UTF8, "application/xml")
+        };
+        Assert.Equal(HttpStatusCode.OK, (await SendSignedAsync(client, putNotification, credentials)).StatusCode);
+        var getNotification = await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/controls?notification"), credentials);
+        Assert.Equal(HttpStatusCode.OK, getNotification.StatusCode);
+        Assert.Contains("<Topic>arn:means:topic</Topic>", await getNotification.Content.ReadAsStringAsync());
+    }
+
     private static async Task<HttpResponseMessage> SendSignedAsync(HttpClient client, HttpRequestMessage request, SigV4SigningCredentials credentials)
     {
         SigV4RequestSigner.Sign(request, credentials, now: new DateTimeOffset(2026, 5, 8, 0, 0, 0, TimeSpan.Zero));
@@ -411,6 +624,7 @@ public sealed class S3EndpointTests
             {
                 configuration.AddInMemoryCollection(new Dictionary<string, string?>
                 {
+                    ["Means:Storage:Backend"] = "SqliteFs",
                     ["Means:Storage:DatabasePath"] = Path.Combine(_root, "means.db"),
                     ["Means:Storage:ObjectsPath"] = Path.Combine(_root, "objects"),
                     ["Means:Storage:DefaultAccessKey"] = "meansadmin",

@@ -15,7 +15,8 @@ import {
   type UploadObjectMultipartInput
 } from "@means/sdk";
 import { createHash, createHmac } from "node:crypto";
-import { open } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { stat as statFile } from "node:fs/promises";
 import type { Readable } from "node:stream";
 
 export * from "@means/sdk";
@@ -48,6 +49,7 @@ export interface NodePutObjectInput extends Omit<PutObjectInput, "body"> {
 export interface PresignedObjectInput {
   bucket: string;
   key: string;
+  versionId?: string;
   expiresIn?: number;
 }
 
@@ -64,8 +66,14 @@ export interface CreatePresignedObjectUrlOptions extends BuildObjectUrlOptions {
   credentials: MeansCredentials;
   region?: string;
   service?: string;
+  versionId?: string;
   expiresIn?: number;
   now?: () => Date;
+}
+
+export interface CreatePresignedUploadPartUrlOptions extends CreatePresignedObjectUrlOptions {
+  uploadId: string;
+  partNumber: number;
 }
 
 export class MeansNodeClient extends MeansClient {
@@ -94,7 +102,9 @@ export class MeansNodeClient extends MeansClient {
   }
 
   createPresignedGetUrl(input: PresignedObjectInput): string {
-    return this.sigV4Signer.presign(this.objectUrl(input.bucket, input.key), "GET", input.expiresIn).toString();
+    const url = this.objectUrl(input.bucket, input.key);
+    appendOptionalQuery(url, "versionId", input.versionId);
+    return this.sigV4Signer.presign(url, "GET", input.expiresIn).toString();
   }
 
   createPresignedPutUrl(input: PresignedObjectInput): string {
@@ -124,32 +134,44 @@ export class MeansNodeClient extends MeansClient {
       throw new RangeError("Multipart part size must be at least 5 MiB.");
     }
 
+    const concurrency = normalizeMultipartConcurrency(input.concurrency);
     const upload = await this.initiateMultipartUpload(input, options);
     const parts: Array<{ partNumber: number; etag: string }> = [];
-    const file = await open(input.filePath, "r");
     try {
-      const stat = await file.stat();
-      let offset = 0;
-      let partNumber = 1;
-      while (offset < stat.size) {
-        const toRead = Math.min(partSize, stat.size - offset);
-        const buffer = Buffer.allocUnsafe(toRead);
-        const { bytesRead } = await file.read(buffer, 0, toRead, offset);
-        if (bytesRead === 0) {
-          break;
-        }
+      const fileInfo = await statFile(input.filePath);
+      const partCount = Math.ceil(fileInfo.size / partSize);
+      const completed = new Array<{ partNumber: number; etag: string }>(partCount);
+      let nextPartIndex = 0;
+      let failed = false;
+      const worker = async () => {
+        while (!failed) {
+          const partIndex = nextPartIndex;
+          nextPartIndex += 1;
+          if (partIndex >= partCount) {
+            return;
+          }
 
-        const part = await this.uploadPart({
-          bucket: input.bucket,
-          key: input.key,
-          uploadId: upload.uploadId,
-          partNumber,
-          body: bytesRead === buffer.length ? buffer : buffer.subarray(0, bytesRead),
-          contentType: input.contentType
-        }, options);
-        parts.push({ partNumber, etag: part.etag ?? "" });
-        offset += bytesRead;
-        partNumber += 1;
+          const partNumber = partIndex + 1;
+          const start = partIndex * partSize;
+          const end = Math.min(start + partSize, fileInfo.size) - 1;
+          const part = await this.uploadPart({
+            bucket: input.bucket,
+            key: input.key,
+            uploadId: upload.uploadId,
+            partNumber,
+            body: createReadStream(input.filePath, { start, end }) as unknown as BodyPayload,
+            contentType: input.contentType
+          }, options).catch((error) => {
+            failed = true;
+            throw error;
+          });
+          completed[partIndex] = { partNumber, etag: part.etag ?? "" };
+        }
+      };
+
+      if (partCount > 0) {
+        await Promise.all(Array.from({ length: Math.min(concurrency, partCount) }, () => worker()));
+        parts.push(...completed);
       }
 
       if (parts.length === 0) {
@@ -177,8 +199,6 @@ export class MeansNodeClient extends MeansClient {
         uploadId: upload.uploadId
       }, options).catch(() => undefined);
       throw error;
-    } finally {
-      await file.close();
     }
   }
 }
@@ -285,6 +305,20 @@ export function createPresignedPutUrl(options: CreatePresignedObjectUrlOptions):
   return createPresignedObjectUrl("PUT", options);
 }
 
+export function createPresignedUploadPartUrl(options: CreatePresignedUploadPartUrlOptions): string {
+  const signer = new SigV4Signer({
+    credentials: options.credentials,
+    region: options.region,
+    service: options.service,
+    now: options.now
+  });
+
+  const url = buildMeansObjectUrl(options);
+  url.searchParams.set("partNumber", options.partNumber.toString());
+  url.searchParams.set("uploadId", options.uploadId);
+  return signer.presign(url, "PUT", options.expiresIn).toString();
+}
+
 export function createSigV4Signer(options: SigV4SignerOptions): SigV4Signer {
   return new SigV4Signer(options);
 }
@@ -309,7 +343,15 @@ function createPresignedObjectUrl(method: "GET" | "PUT", options: CreatePresigne
     now: options.now
   });
 
-  return signer.presign(buildMeansObjectUrl(options), method, options.expiresIn).toString();
+  const url = buildMeansObjectUrl(options);
+  appendOptionalQuery(url, "versionId", method === "GET" ? options.versionId : undefined);
+  return signer.presign(url, method, options.expiresIn).toString();
+}
+
+function appendOptionalQuery(url: URL, key: string, value: string | undefined): void {
+  if (value != null && value.length > 0) {
+    url.searchParams.set(key, value);
+  }
 }
 
 function buildCanonicalRequest(input: {
@@ -450,6 +492,18 @@ function formatAmzDate(date: Date): string {
 
 function formatShortDate(date: Date): string {
   return formatAmzDate(date).slice(0, 8);
+}
+
+function normalizeMultipartConcurrency(value: number | undefined): number {
+  if (value === undefined) {
+    return 3;
+  }
+
+  if (!Number.isFinite(value) || value < 1) {
+    throw new RangeError("Multipart concurrency must be at least 1.");
+  }
+
+  return Math.min(Math.floor(value), 16);
 }
 
 function normalizeExpires(expiresIn: number): number {

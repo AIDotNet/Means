@@ -1,5 +1,6 @@
 using Means.Composition;
 using Means.Endpoints.Console;
+using Means.Endpoints.Metrics;
 using Means.Endpoints.S3;
 using Means.Middleware;
 
@@ -12,6 +13,7 @@ var app = builder.Build();
 
 app.UseDefaultFiles();
 app.UseStaticFiles();
+app.UseRouting();
 
 if (app.Environment.IsDevelopment())
 {
@@ -20,10 +22,12 @@ if (app.Environment.IsDevelopment())
 
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseMeansApiRateLimits();
 app.UseConsoleApiErrors();
 app.UseMeansRequestBodyLimits();
 
 app.MapConsoleApi();
+app.MapMeansMetrics();
 
 // All S3-compatible data-plane requests are resolved by the S3 endpoint router.
 // Keeping route mapping behind an extension makes Program.cs stay as the composition root only.

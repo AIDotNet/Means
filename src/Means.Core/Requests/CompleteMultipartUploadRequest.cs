@@ -7,4 +7,5 @@ public sealed record CompleteMultipartUploadRequest(
     string BucketName,
     string Key,
     string UploadId,
-    IReadOnlyList<CompletedMultipartPart> Parts);
+    IReadOnlyList<CompletedMultipartPart> Parts,
+    string? IdempotencyKey = null);

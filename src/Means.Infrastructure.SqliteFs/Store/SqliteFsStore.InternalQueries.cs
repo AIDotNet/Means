@@ -79,6 +79,28 @@ public sealed partial class SqliteFsStore
         return metadata;
     }
 
+    private static string? PrefixUpperBound(string prefix)
+    {
+        if (prefix.Length == 0)
+        {
+            return null;
+        }
+
+        var chars = prefix.ToCharArray();
+        for (var index = chars.Length - 1; index >= 0; index--)
+        {
+            if (chars[index] == char.MaxValue)
+            {
+                continue;
+            }
+
+            chars[index]++;
+            return new string(chars, 0, index + 1);
+        }
+
+        return null;
+    }
+
     /// <summary>
     /// Writes object metadata and user metadata as one SQLite transaction unit.
     /// The caller owns the blob-file move and passes the same transaction so the object becomes

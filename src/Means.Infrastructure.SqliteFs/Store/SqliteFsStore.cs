@@ -9,17 +9,19 @@ namespace Means.Infrastructure.SqliteFs;
 /// The class is split into partial files by operation group so the storage adapter remains
 /// readable while still sharing the same transaction and file-layout helpers.
 /// </summary>
-public sealed partial class SqliteFsStore : IObjectStore, IAccessKeyStore, IBucketPolicyRepository, IConsoleStore, IClusterStore
+public sealed partial class SqliteFsStore : IObjectStore, IAccessKeyStore, IBucketPolicyRepository, IConsoleStore, IClusterStore, IErasureCodingProfileStore, IMetadataMaintenanceStore, IStorageMaintenanceOperations
 {
     private readonly SqliteFsOptions _options;
+    private readonly IObjectPlacementPlanner _placementPlanner;
     private readonly SemaphoreSlim _initializationLock = new(1, 1);
     private bool _initialized;
 
-    public SqliteFsStore(IOptions<SqliteFsOptions> options)
+    public SqliteFsStore(IOptions<SqliteFsOptions> options, IObjectPlacementPlanner? placementPlanner = null)
     {
         _options = options.Value;
         _options.DatabasePath = ResolvePath(_options.DatabasePath);
         _options.ObjectsPath = ResolvePath(_options.ObjectsPath);
+        _placementPlanner = placementPlanner ?? new DeterministicObjectPlacementPlanner();
     }
 
     /// <summary>

@@ -8,4 +8,8 @@ public sealed record ListPartsResult(
     string Key,
     string UploadId,
     DateTimeOffset InitiatedAt,
+    int PartNumberMarker,
+    int NextPartNumberMarker,
+    int MaxParts,
+    bool IsTruncated,
     IReadOnlyList<MultipartPartInfo> Parts);

@@ -11,8 +11,8 @@ public static class S3EndpointRouteBuilderExtensions
     {
         var serviceHost = configuration["Means:S3:ServiceHost"] ?? "api.means.local";
         var domainSuffix = configuration["Means:S3:DomainSuffix"] ?? "means.local";
-        endpoints.MapMethods("/s3/{**path}", ["GET", "PUT", "POST", "HEAD", "DELETE"], S3Endpoint.HandleAsync);
-        endpoints.MapMethods("/{**path}", ["GET", "PUT", "POST", "HEAD", "DELETE"], S3Endpoint.HandleAsync)
+        endpoints.MapMethods("/s3/{**path}", ["GET", "PUT", "POST", "HEAD", "DELETE", "OPTIONS"], S3Endpoint.HandleAsync);
+        endpoints.MapMethods("/{**path}", ["GET", "PUT", "POST", "HEAD", "DELETE", "OPTIONS"], S3Endpoint.HandleAsync)
             .RequireHost(serviceHost, "*." + domainSuffix);
         return endpoints;
     }

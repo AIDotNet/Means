@@ -1,0 +1,524 @@
+using System.Security.Cryptography;
+using System.Text.Json;
+using Means.Core;
+
+namespace Means.Infrastructure.XlFs;
+
+public sealed partial class XlFsStore
+{
+    public async Task<IReadOnlyList<BucketInfo>> ListBucketsAsync(CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        var rows = await Db.ScanPrefixAsync(Keys.BucketPrefix, 100_000, null, cancellationToken);
+        return rows.Select(row => Deserialize<XlBucketRecord>(row.Value))
+            .OrderBy(bucket => bucket.Name, StringComparer.Ordinal)
+            .Select(bucket => new BucketInfo(bucket.Name, bucket.CreatedAt))
+            .ToArray();
+    }
+
+    public async Task<BucketInfo> CreateBucketAsync(string bucketName, CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        if (await BucketExistsAsync(bucketName, cancellationToken))
+        {
+            throw new MeansException(MeansErrorCodes.BucketAlreadyExists, "Bucket already exists.", 409);
+        }
+
+        var bucket = new XlBucketRecord(bucketName, DateTimeOffset.UtcNow);
+        await Db.PutJsonAsync(Keys.Bucket(bucketName), bucket, cancellationToken);
+        return new BucketInfo(bucket.Name, bucket.CreatedAt);
+    }
+
+    public async Task<BucketInfo?> GetBucketAsync(string bucketName, CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        var bucket = await Db.GetJsonAsync<XlBucketRecord>(Keys.Bucket(bucketName), cancellationToken);
+        return bucket is null ? null : new BucketInfo(bucket.Name, bucket.CreatedAt);
+    }
+
+    public async Task DeleteBucketAsync(string bucketName, CancellationToken cancellationToken)
+    {
+        await EnsureBucketAsync(bucketName, cancellationToken);
+        if ((await Db.ScanPrefixAsync(Keys.CurrentObjectPrefix(bucketName), 1, null, cancellationToken)).Count > 0
+            || (await Db.ScanPrefixAsync(Keys.MultipartUploadPrefix(bucketName), 1, null, cancellationToken)).Count > 0)
+        {
+            throw new MeansException(MeansErrorCodes.BucketNotEmpty, "Bucket is not empty.", 409);
+        }
+
+        await Db.PutBatchAsync([new LogDbMutation(Keys.Bucket(bucketName), null, true)], cancellationToken);
+    }
+
+    public async Task<ListObjectsResult> ListObjectsAsync(
+        string bucketName,
+        ListObjectsOptions options,
+        CancellationToken cancellationToken)
+    {
+        await EnsureBucketAsync(bucketName, cancellationToken);
+        var maxKeys = Math.Clamp(options.MaxKeys, 1, 1000);
+        var prefix = options.Prefix ?? string.Empty;
+        var dbPrefix = Keys.CurrentObjectPrefix(bucketName) + Escape(prefix);
+        var rows = await Db.ScanPrefixAsync(dbPrefix, maxKeys + 1, DecodeToken(options.ContinuationToken), cancellationToken);
+        var objects = new List<ListedObject>();
+        var commonPrefixes = new SortedSet<string>(StringComparer.Ordinal);
+        string? nextToken = null;
+        string? lastScannedKey = DecodeToken(options.ContinuationToken);
+        foreach (var row in rows)
+        {
+            if (objects.Count + commonPrefixes.Count >= maxKeys)
+            {
+                nextToken = lastScannedKey is null ? null : EncodeToken(lastScannedKey);
+                break;
+            }
+
+            lastScannedKey = row.Key;
+            var record = Deserialize<XlObjectRecord>(row.Value);
+            if (record.IsDeleteMarker)
+            {
+                continue;
+            }
+
+            if (!string.IsNullOrEmpty(options.Delimiter))
+            {
+                var rest = record.Key.Length >= prefix.Length ? record.Key[prefix.Length..] : record.Key;
+                var delimiterIndex = rest.IndexOf(options.Delimiter, StringComparison.Ordinal);
+                if (delimiterIndex >= 0)
+                {
+                    commonPrefixes.Add(prefix + rest[..(delimiterIndex + options.Delimiter.Length)]);
+                    continue;
+                }
+            }
+
+            objects.Add(new ListedObject(record.Key, record.ETag, record.ContentLength, record.LastModified, record.ContentType));
+        }
+
+        return new ListObjectsResult(
+            bucketName,
+            options.Prefix,
+            options.Delimiter,
+            objects.Count + commonPrefixes.Count,
+            nextToken is not null,
+            nextToken,
+            objects,
+            commonPrefixes.ToArray());
+    }
+
+    public async Task<ListObjectVersionsResult> ListObjectVersionsAsync(
+        string bucketName,
+        ListObjectVersionsOptions options,
+        CancellationToken cancellationToken)
+    {
+        await EnsureBucketAsync(bucketName, cancellationToken);
+        var maxKeys = Math.Clamp(options.MaxKeys, 1, 1000);
+        var prefix = options.Prefix ?? string.Empty;
+        var dbPrefix = Keys.VersionPrefix(bucketName) + Escape(prefix);
+        var afterKey = VersionScanAfterKey(bucketName, options.KeyMarker, options.VersionIdMarker);
+        var page = new List<XlObjectRecord>(maxKeys + 1);
+        var currentGroup = new List<XlObjectRecord>();
+        string? currentKey = null;
+        string? scanAfter = afterKey;
+        var exhausted = false;
+
+        while (page.Count <= maxKeys && !exhausted)
+        {
+            var rows = await Db.ScanPrefixAsync(dbPrefix, Math.Min(Math.Max(maxKeys * 4, 128), 4096), scanAfter, cancellationToken);
+            if (rows.Count == 0)
+            {
+                exhausted = true;
+                break;
+            }
+
+            foreach (var row in rows)
+            {
+                scanAfter = row.Key;
+                var record = Deserialize<XlObjectRecord>(row.Value);
+                if (currentKey is not null && !string.Equals(record.Key, currentKey, StringComparison.Ordinal))
+                {
+                    AppendVersionGroup(page, currentGroup);
+                    currentGroup.Clear();
+                    if (page.Count > maxKeys)
+                    {
+                        break;
+                    }
+                }
+
+                currentKey = record.Key;
+                currentGroup.Add(record);
+            }
+
+            exhausted = rows.Count < Math.Min(Math.Max(maxKeys * 4, 128), 4096);
+        }
+
+        if (page.Count <= maxKeys && currentGroup.Count > 0)
+        {
+            AppendVersionGroup(page, currentGroup);
+        }
+
+        var visible = page.Take(maxKeys).ToArray();
+        var current = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var key in visible.Select(row => row.Key).Distinct(StringComparer.Ordinal))
+        {
+            var currentRecord = await Db.GetJsonAsync<XlObjectRecord>(Keys.CurrentObject(bucketName, key), cancellationToken);
+            if (currentRecord is not null)
+            {
+                current[key] = currentRecord.VersionId;
+            }
+        }
+
+        var isTruncated = page.Count > maxKeys;
+        var lastReturned = visible.LastOrDefault();
+        return new ListObjectVersionsResult(
+            bucketName,
+            options.Prefix,
+            options.Delimiter,
+            options.KeyMarker,
+            options.VersionIdMarker,
+            maxKeys,
+            isTruncated,
+            isTruncated ? lastReturned?.Key : null,
+            isTruncated ? lastReturned?.VersionId : null,
+            visible.Select(row => new ListedObjectVersion(
+                row.Key,
+                row.VersionId,
+                current.TryGetValue(row.Key, out var latest) && latest == row.VersionId,
+                row.IsDeleteMarker,
+                row.ETag,
+                row.ContentLength,
+                row.LastModified)).ToArray(),
+            []);
+    }
+
+    private static void AppendVersionGroup(List<XlObjectRecord> output, List<XlObjectRecord> group)
+    {
+        foreach (var record in group.OrderByDescending(row => row.LastModified))
+        {
+            output.Add(record);
+        }
+    }
+
+    private static string? VersionScanAfterKey(string bucketName, string? keyMarker, string? versionIdMarker)
+    {
+        if (string.IsNullOrWhiteSpace(keyMarker))
+        {
+            return null;
+        }
+
+        return string.IsNullOrWhiteSpace(versionIdMarker)
+            ? Keys.VersionPrefix(bucketName) + Escape(keyMarker) + ":\uffff"
+            : Keys.Version(bucketName, keyMarker, versionIdMarker);
+    }
+
+    public async Task<ObjectInfo> PutObjectAsync(PutObjectRequest request, CancellationToken cancellationToken)
+    {
+        await EnsureBucketAsync(request.BucketName, cancellationToken);
+        var objectId = Guid.NewGuid().ToString("N");
+        var tempPath = TempPath(objectId + ".put.tmp");
+        Directory.CreateDirectory(Path.GetDirectoryName(tempPath)!);
+        try
+        {
+            var hash = await WriteTempObjectAsync(request.Content, tempPath, cancellationToken);
+            return await CommitObjectFromFileAsync(
+                request.BucketName,
+                request.Key,
+                objectId,
+                tempPath,
+                hash.ETag,
+                hash.ChecksumSha256,
+                hash.Length,
+                string.IsNullOrWhiteSpace(request.ContentType) ? "application/octet-stream" : request.ContentType,
+                NormalizeMetadata(request.Metadata),
+                request.CacheControl,
+                request.ContentDisposition,
+                cancellationToken);
+        }
+        finally
+        {
+            DeleteFileQuietly(tempPath);
+        }
+    }
+
+    public Task<ObjectData> GetObjectAsync(string bucketName, string key, CancellationToken cancellationToken)
+    {
+        return GetObjectAsync(bucketName, key, null, cancellationToken);
+    }
+
+    public async Task<ObjectData> GetObjectAsync(string bucketName, string key, string? versionId, CancellationToken cancellationToken)
+    {
+        var info = await HeadObjectAsync(bucketName, key, versionId, cancellationToken);
+        var manifest = await ReadManifestAsync(info, cancellationToken);
+        if (manifest.Parts.Count == 1)
+        {
+            foreach (var shard in manifest.Parts[0].Shards.OrderBy(shard => shard.SetIndex))
+            {
+                var opened = await TryOpenReadableShardAsync(shard, cancellationToken);
+                if (opened.ChecksumMismatch)
+                {
+                    await QueueHealAsync(info, "ShardChecksumMismatch", cancellationToken);
+                    continue;
+                }
+
+                if (opened.Stream is not null)
+                {
+                    return new ObjectData(info, opened.Stream, opened.Path);
+                }
+            }
+
+            await QueueHealAsync(info, "NoReadableShard", cancellationToken);
+            throw new MeansException(MeansErrorCodes.NoSuchKey, "Object content is missing.", 404);
+        }
+
+        var segments = new List<ShardReadSegment>(manifest.Parts.Count);
+        foreach (var part in manifest.Parts.OrderBy(part => part.PartNumber))
+        {
+            var resolved = false;
+            foreach (var shard in part.Shards.OrderBy(shard => shard.SetIndex))
+            {
+                var path = await TryResolveReadableShardPathAsync(shard, cancellationToken);
+                if (path.ChecksumMismatch)
+                {
+                    await QueueHealAsync(info, "ShardChecksumMismatch", cancellationToken);
+                    continue;
+                }
+
+                if (path.Path is not null)
+                {
+                    segments.Add(new ShardReadSegment(path.Path, part.Size));
+                    resolved = true;
+                    break;
+                }
+            }
+
+            if (!resolved)
+            {
+                await QueueHealAsync(info, "NoReadableMultipartPartShard", cancellationToken);
+                throw new MeansException(MeansErrorCodes.NoSuchKey, "Object content is missing.", 404);
+            }
+        }
+
+        return new ObjectData(info, new XlCompositeReadStream(segments));
+    }
+
+    public Task<ObjectInfo> HeadObjectAsync(string bucketName, string key, CancellationToken cancellationToken)
+    {
+        return HeadObjectAsync(bucketName, key, null, cancellationToken);
+    }
+
+    public async Task<ObjectInfo> HeadObjectAsync(string bucketName, string key, string? versionId, CancellationToken cancellationToken)
+    {
+        await EnsureBucketAsync(bucketName, cancellationToken);
+        var record = string.IsNullOrWhiteSpace(versionId)
+            ? await Db.GetJsonAsync<XlObjectRecord>(Keys.CurrentObject(bucketName, key), cancellationToken)
+            : await Db.GetJsonAsync<XlObjectRecord>(Keys.Version(bucketName, key, versionId), cancellationToken);
+        if (record is null || record.IsDeleteMarker)
+        {
+            throw new MeansException(string.IsNullOrWhiteSpace(versionId) ? MeansErrorCodes.NoSuchKey : MeansErrorCodes.NoSuchVersion, "Object does not exist.", 404);
+        }
+
+        return ToObjectInfo(record);
+    }
+
+    public async Task DeleteObjectAsync(string bucketName, string key, CancellationToken cancellationToken)
+    {
+        _ = await DeleteObjectAsync(bucketName, key, null, cancellationToken);
+    }
+
+    public async Task<DeleteObjectResult> DeleteObjectAsync(string bucketName, string key, string? versionId, CancellationToken cancellationToken)
+    {
+        await EnsureBucketAsync(bucketName, cancellationToken);
+        if (!string.IsNullOrWhiteSpace(versionId))
+        {
+            var record = await Db.GetJsonAsync<XlObjectRecord>(Keys.Version(bucketName, key, versionId), cancellationToken)
+                ?? throw new MeansException(MeansErrorCodes.NoSuchVersion, "Object version does not exist.", 404);
+            await Db.PutBatchAsync([new LogDbMutation(Keys.Version(bucketName, key, versionId), null, true)], cancellationToken);
+            var current = await Db.GetJsonAsync<XlObjectRecord>(Keys.CurrentObject(bucketName, key), cancellationToken);
+            if (current?.VersionId == versionId)
+            {
+                await Db.PutBatchAsync([new LogDbMutation(Keys.CurrentObject(bucketName, key), null, true)], cancellationToken);
+            }
+
+            DeleteObjectFilesQuietly(record);
+            return new DeleteObjectResult(bucketName, key, versionId, record.IsDeleteMarker);
+        }
+
+        if (string.Equals(await GetBucketVersioningStatusAsync(bucketName, cancellationToken), BucketVersioningStatuses.Enabled, StringComparison.Ordinal))
+        {
+            var markerId = Guid.NewGuid().ToString("N");
+            var now = DateTimeOffset.UtcNow;
+            var marker = new XlObjectRecord(bucketName, key, markerId, markerId, string.Empty, 0, "application/octet-stream", now, true, new Dictionary<string, string>(), new Dictionary<string, string>(), null, null);
+            await Db.PutBatchAsync([
+                new LogDbMutation(Keys.Version(bucketName, key, markerId), Serialize(marker), false),
+                new LogDbMutation(Keys.CurrentObject(bucketName, key), Serialize(marker), false)
+            ], cancellationToken);
+            return new DeleteObjectResult(bucketName, key, markerId, true);
+        }
+
+        var existing = await Db.GetJsonAsync<XlObjectRecord>(Keys.CurrentObject(bucketName, key), cancellationToken);
+        var deleteMutations = new List<LogDbMutation> { new(Keys.CurrentObject(bucketName, key), null, true) };
+        if (existing is not null)
+        {
+            deleteMutations.Add(new LogDbMutation(Keys.Version(bucketName, key, existing.VersionId), null, true));
+        }
+
+        await Db.PutBatchAsync(deleteMutations, cancellationToken);
+        if (existing is not null)
+        {
+            DeleteObjectFilesQuietly(existing);
+        }
+
+        return new DeleteObjectResult(bucketName, key, null, false);
+    }
+
+    public async Task<ObjectInfo> CopyObjectAsync(CopyObjectRequest request, CancellationToken cancellationToken)
+    {
+        await using var source = await GetObjectAsync(request.SourceBucket, request.SourceKey, request.SourceVersionId, cancellationToken);
+        var replace = string.Equals(request.MetadataDirective, CopyMetadataDirectives.Replace, StringComparison.OrdinalIgnoreCase);
+        return await PutObjectAsync(new PutObjectRequest(
+            request.DestinationBucket,
+            request.DestinationKey,
+            source.Content,
+            string.IsNullOrWhiteSpace(request.ContentType) ? source.Info.ContentType : request.ContentType,
+            replace ? request.Metadata : source.Info.Metadata,
+            replace ? request.CacheControl : request.CacheControl ?? source.Info.CacheControl,
+            replace ? request.ContentDisposition : request.ContentDisposition ?? source.Info.ContentDisposition), cancellationToken);
+    }
+
+    private async Task<ObjectInfo> CommitObjectFromFileAsync(
+        string bucketName,
+        string key,
+        string objectId,
+        string sourcePath,
+        string etag,
+        string checksum,
+        long length,
+        string contentType,
+        IReadOnlyDictionary<string, string> metadata,
+        string? cacheControl,
+        string? contentDisposition,
+        CancellationToken cancellationToken)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var shards = await WriteFullCopyShardsAsync(
+            sourcePath,
+            disk => ObjectRelativePath(bucketName, objectId, disk.SetIndex),
+            length,
+            checksum,
+            "Insufficient online disks for write quorum.",
+            cancellationToken);
+
+        var record = new XlObjectRecord(bucketName, key, objectId, objectId, etag, length, contentType, now, false, metadata, new Dictionary<string, string>(), cacheControl, contentDisposition);
+        var manifest = new XlObjectManifest(
+            FormatVersion,
+            bucketName,
+            key,
+            objectId,
+            objectId,
+            etag,
+            length,
+            contentType,
+            now,
+            false,
+            new XlErasureInfo("full-copy-v1", Math.Max(1, _options.ErasureDataShards), Math.Max(0, _options.ErasureParityShards), 128 * 1024, WriteQuorum, ReadQuorum),
+            [new XlPartManifest(1, "part.0", length, etag, checksum, shards)],
+            metadata,
+            new Dictionary<string, string>(),
+            cacheControl,
+            contentDisposition);
+        await WriteManifestCopiesAsync(bucketName, objectId, manifest, shards, cancellationToken);
+
+        var existing = await Db.GetJsonAsync<XlObjectRecord>(Keys.CurrentObject(bucketName, key), cancellationToken);
+        await Db.PutBatchAsync([
+            new LogDbMutation(Keys.Version(bucketName, key, objectId), Serialize(record), false),
+            new LogDbMutation(Keys.CurrentObject(bucketName, key), Serialize(record), false)
+        ], cancellationToken);
+        if (existing is not null && !string.Equals(await GetBucketVersioningStatusAsync(bucketName, cancellationToken), BucketVersioningStatuses.Enabled, StringComparison.Ordinal))
+        {
+            DeleteObjectFilesQuietly(existing);
+        }
+
+        return ToObjectInfo(record);
+    }
+
+    private async Task<(string ETag, string ChecksumSha256, long Length)> WriteTempObjectAsync(Stream input, string path, CancellationToken cancellationToken)
+    {
+        await using var output = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, XlStreamBufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        using var md5 = IncrementalHash.CreateHash(HashAlgorithmName.MD5);
+        using var sha256 = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = new byte[XlStreamBufferSize];
+        long length = 0;
+        int read;
+        while ((read = await input.ReadAsync(buffer, cancellationToken)) > 0)
+        {
+            await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+            md5.AppendData(buffer.AsSpan(0, read));
+            sha256.AppendData(buffer.AsSpan(0, read));
+            length += read;
+        }
+
+        return (
+            Convert.ToHexString(md5.GetHashAndReset()).ToLowerInvariant(),
+            Convert.ToHexString(sha256.GetHashAndReset()).ToLowerInvariant(),
+            length);
+    }
+
+    private async Task<string> GetBucketVersioningStatusAsync(string bucketName, CancellationToken cancellationToken)
+    {
+        return await Db.GetJsonAsync<string>(Keys.BucketVersioning(bucketName), cancellationToken) ?? BucketVersioningStatuses.Off;
+    }
+
+    private void DeleteObjectFilesQuietly(XlObjectRecord record)
+    {
+        var deletedAnyManifest = false;
+        var shardPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var disk in _disks)
+        {
+            var manifestPath = Path.Combine(disk.RootPath, ObjectManifestRelativePath(record.BucketName, record.ObjectId));
+            try
+            {
+                if (!File.Exists(manifestPath))
+                {
+                    continue;
+                }
+
+                var manifest = JsonSerializer.Deserialize<XlObjectManifest>(File.ReadAllText(manifestPath));
+                foreach (var shard in manifest?.Parts.SelectMany(part => part.Shards) ?? [])
+                {
+                    var shardDisk = _disks.FirstOrDefault(item => item.DiskId == shard.DiskId);
+                    if (shardDisk is not null)
+                    {
+                        shardPaths.Add(Path.Combine(shardDisk.RootPath, shard.RelativePath));
+                    }
+                }
+
+                File.Delete(manifestPath);
+                deletedAnyManifest = true;
+            }
+            catch
+            {
+            }
+        }
+
+        foreach (var path in shardPaths)
+        {
+            DeleteFileQuietly(path);
+        }
+
+        if (deletedAnyManifest)
+        {
+            return;
+        }
+
+        foreach (var disk in _disks)
+        {
+            var dir = Path.Combine(disk.RootPath, "objects", BucketHash(record.BucketName), record.ObjectId);
+            try
+            {
+                if (Directory.Exists(dir))
+                {
+                    Directory.Delete(dir, recursive: true);
+                }
+            }
+            catch
+            {
+            }
+        }
+    }
+}

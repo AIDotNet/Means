@@ -21,16 +21,52 @@ internal static class S3RequestParser
                 StringComparer.OrdinalIgnoreCase);
     }
 
-    public static (string Bucket, string Key) ParseCopySource(string value)
+    public static (string Bucket, string Key, string? VersionId) ParseCopySource(string value)
     {
         var source = Uri.UnescapeDataString(value.Trim().TrimStart('/'));
-        var slash = source.IndexOf('/');
-        if (slash <= 0 || slash == source.Length - 1)
+        var queryIndex = source.IndexOf('?', StringComparison.Ordinal);
+        var path = queryIndex >= 0 ? source[..queryIndex] : source;
+        var query = queryIndex >= 0 ? source[(queryIndex + 1)..] : "";
+        var slash = path.IndexOf('/');
+        if (slash <= 0 || slash == path.Length - 1)
         {
             throw new MeansException(MeansErrorCodes.InvalidArgument, "Invalid x-amz-copy-source header.", 400);
         }
 
-        return (source[..slash], source[(slash + 1)..]);
+        var versionId = ParseQueryValue(query, "versionId");
+        return (path[..slash], path[(slash + 1)..], versionId);
+    }
+
+    public static string ParseMetadataDirective(HttpContext context)
+    {
+        var directive = context.Request.Headers["x-amz-metadata-directive"].ToString();
+        if (string.IsNullOrWhiteSpace(directive))
+        {
+            return CopyMetadataDirectives.Copy;
+        }
+
+        if (string.Equals(directive, CopyMetadataDirectives.Copy, StringComparison.OrdinalIgnoreCase))
+        {
+            return CopyMetadataDirectives.Copy;
+        }
+
+        if (string.Equals(directive, CopyMetadataDirectives.Replace, StringComparison.OrdinalIgnoreCase))
+        {
+            return CopyMetadataDirectives.Replace;
+        }
+
+        throw new MeansException(MeansErrorCodes.InvalidArgument, "Invalid x-amz-metadata-directive header.", 400);
+    }
+
+    public static (long Start, long End)? ParseCopySourceRange(string? value, long length)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        return ParseRange(value, length)
+            ?? throw new MeansException(MeansErrorCodes.InvalidRange, "Invalid copy source range.", 400);
     }
 
     public static (long Start, long End)? ParseRange(string value, long length)
@@ -85,6 +121,11 @@ internal static class S3RequestParser
         return int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) ? parsed : 1000;
     }
 
+    public static int ParseMaxParts(string? value)
+    {
+        return int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) ? parsed : 1000;
+    }
+
     public static int ParsePartNumber(string? value)
     {
         if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var partNumber)
@@ -104,6 +145,88 @@ internal static class S3RequestParser
         }
 
         return value;
+    }
+
+    public static async Task<string> ParseBucketVersioningStatusAsync(Stream body, CancellationToken cancellationToken)
+    {
+        if (body == Stream.Null || body.CanSeek && body.Length == 0)
+        {
+            return BucketVersioningStatuses.Off;
+        }
+
+        var document = await LoadXmlAsync(body, cancellationToken);
+        if (document.Root is null || document.Root.Name.LocalName != "VersioningConfiguration")
+        {
+            throw new MeansException(MeansErrorCodes.MalformedXML, "Malformed VersioningConfiguration XML.", 400);
+        }
+
+        return document.Root.Elements().FirstOrDefault(element => element.Name.LocalName == "Status")?.Value
+            ?? BucketVersioningStatuses.Off;
+    }
+
+    public static async Task<ObjectTagSet> ParseTaggingAsync(Stream body, CancellationToken cancellationToken)
+    {
+        var document = await LoadXmlAsync(body, cancellationToken);
+        if (document.Root is null || document.Root.Name.LocalName != "Tagging")
+        {
+            throw new MeansException(MeansErrorCodes.MalformedXML, "Malformed Tagging XML.", 400);
+        }
+
+        var tags = new Dictionary<string, string>(StringComparer.Ordinal);
+        var tagSet = document.Root.Elements().FirstOrDefault(element => element.Name.LocalName == "TagSet");
+        if (tagSet is not null)
+        {
+            foreach (var tag in tagSet.Elements().Where(element => element.Name.LocalName == "Tag"))
+            {
+                var key = ElementValue(tag, "Key");
+                var value = ElementValue(tag, "Value") ?? "";
+                if (string.IsNullOrWhiteSpace(key))
+                {
+                    throw new MeansException(MeansErrorCodes.InvalidTag, "Tag key is required.", 400);
+                }
+
+                tags[key] = value;
+            }
+        }
+
+        return new ObjectTagSet(tags);
+    }
+
+    public static async Task<BucketLifecycleConfiguration> ParseLifecycleAsync(Stream body, CancellationToken cancellationToken)
+    {
+        var document = await LoadXmlAsync(body, cancellationToken);
+        if (document.Root is null || document.Root.Name.LocalName != "LifecycleConfiguration")
+        {
+            throw new MeansException(MeansErrorCodes.MalformedXML, "Malformed LifecycleConfiguration XML.", 400);
+        }
+
+        var rules = new List<LifecycleRule>();
+        foreach (var rule in document.Root.Elements().Where(element => element.Name.LocalName == "Rule"))
+        {
+            var id = ElementValue(rule, "ID") ?? Guid.NewGuid().ToString("N");
+            var status = ElementValue(rule, "Status") ?? "Disabled";
+            var prefix = ElementValue(rule, "Prefix")
+                ?? rule.Elements().FirstOrDefault(element => element.Name.LocalName == "Filter")
+                    ?.Elements().FirstOrDefault(element => element.Name.LocalName == "Prefix")?.Value
+                ?? "";
+            var expirationDays = ParseOptionalPositiveInt(rule.Elements().FirstOrDefault(element => element.Name.LocalName == "Expiration"), "Days");
+            var noncurrentDays = ParseOptionalPositiveInt(rule.Elements().FirstOrDefault(element => element.Name.LocalName == "NoncurrentVersionExpiration"), "NoncurrentDays");
+            var abortDays = ParseOptionalPositiveInt(rule.Elements().FirstOrDefault(element => element.Name.LocalName == "AbortIncompleteMultipartUpload"), "DaysAfterInitiation");
+            rules.Add(new LifecycleRule(id, status, prefix, expirationDays, noncurrentDays, abortDays));
+        }
+
+        return new BucketLifecycleConfiguration(rules);
+    }
+
+    public static async Task<string> ReadAndValidateXmlAsync(Stream body, string rootName, CancellationToken cancellationToken)
+    {
+        var document = await LoadXmlAsync(body, cancellationToken);
+        if (document.Root is null || document.Root.Name.LocalName != rootName)
+        {
+            throw new MeansException(MeansErrorCodes.MalformedXML, $"Malformed {rootName} XML.", 400);
+        }
+
+        return document.ToString(SaveOptions.DisableFormatting);
     }
 
     public static async Task<IReadOnlyList<CompletedMultipartPart>> ParseCompleteMultipartUploadAsync(Stream body, CancellationToken cancellationToken)
@@ -150,6 +273,54 @@ internal static class S3RequestParser
     private static string? ElementValue(XElement root, string name)
     {
         return root.Elements().FirstOrDefault(element => element.Name.LocalName == name)?.Value;
+    }
+
+    private static async Task<XDocument> LoadXmlAsync(Stream body, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await XDocument.LoadAsync(body, LoadOptions.None, cancellationToken);
+        }
+        catch (MeansException)
+        {
+            throw;
+        }
+        catch
+        {
+            throw new MeansException(MeansErrorCodes.MalformedXML, "Malformed XML document.", 400);
+        }
+    }
+
+    private static int? ParseOptionalPositiveInt(XElement? root, string name)
+    {
+        var value = root is null ? null : ElementValue(root, name);
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        return int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) && parsed > 0
+            ? parsed
+            : throw new MeansException(MeansErrorCodes.MalformedXML, "Lifecycle numeric values must be positive integers.", 400);
+    }
+
+    private static string? ParseQueryValue(string query, string name)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return null;
+        }
+
+        foreach (var part in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var pair = part.Split('=', 2);
+            if (pair.Length == 2 && string.Equals(pair[0], name, StringComparison.Ordinal))
+            {
+                return Uri.UnescapeDataString(pair[1]);
+            }
+        }
+
+        return null;
     }
 
     private static MeansException MalformedCompleteMultipartUpload()

@@ -55,3 +55,61 @@ await client.uploadObjectMultipart({
 ```
 
 The helper uses 16 MiB parts by default and aborts the multipart upload if any part fails. Browser code still needs anonymous policy access or presigned URLs; this package does not contain secret-key signing.
+
+Low-level multipart calls also include `uploadPartCopy`, `listParts` pagination, and bucket-level `listMultipartUploads` pagination/common-prefix fields.
+
+## Versioning and lifecycle
+
+```ts
+await client.setBucketVersioning({ bucket: "uploads", status: "Enabled" });
+
+const versions = await client.listObjectVersions({
+  bucket: "uploads",
+  prefix: "raw/"
+});
+
+const oldObject = await client.getObject({
+  bucket: "uploads",
+  key: "raw/photo.jpg",
+  versionId: versions.versions[0].versionId
+});
+
+await client.putBucketLifecycle({
+  bucket: "uploads",
+  configuration: {
+    rules: [
+      {
+        id: "expire-temp",
+        status: "Enabled",
+        prefix: "tmp/",
+        expirationDays: 7,
+        abortIncompleteMultipartUploadDays: 1
+      }
+    ]
+  }
+});
+```
+
+Lifecycle day values must be positive integers. Use `deleteBucketLifecycle` to remove all rules.
+
+## Tagging, CORS, and notification
+
+```ts
+await client.putObjectTagging({
+  bucket: "uploads",
+  key: "raw/photo.jpg",
+  tags: { kind: "raw" }
+});
+
+const tagging = await client.getObjectTagging({
+  bucket: "uploads",
+  key: "raw/photo.jpg"
+});
+
+await client.putBucketCors({
+  bucket: "uploads",
+  xml: "<CORSConfiguration><CORSRule><AllowedOrigin>*</AllowedOrigin><AllowedMethod>GET</AllowedMethod></CORSRule></CORSConfiguration>"
+});
+```
+
+Bucket CORS and notification APIs accept raw XML. The SDK validates the root element and leaves detailed S3 XML compatibility to the service.

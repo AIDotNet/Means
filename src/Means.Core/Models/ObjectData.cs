@@ -4,7 +4,7 @@ namespace Means.Core;
 /// Object metadata plus an open readable content stream.
 /// The caller owns disposal so endpoint code can stream without buffering whole objects in memory.
 /// </summary>
-public sealed record ObjectData(ObjectInfo Info, Stream Content) : IAsyncDisposable
+public sealed record ObjectData(ObjectInfo Info, Stream Content, string? ContentPath = null) : IAsyncDisposable
 {
     public ValueTask DisposeAsync()
     {

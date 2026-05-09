@@ -14,14 +14,30 @@ public sealed class SdkSpecTests
                      "createBucket",
                      "headBucket",
                      "deleteBucket",
+                     "getBucketVersioning",
+                     "putBucketVersioning",
+                     "getBucketLifecycle",
+                     "putBucketLifecycle",
+                     "deleteBucketLifecycle",
                      "listObjects",
+                     "listObjectVersions",
                      "putObject",
                      "getObject",
                      "headObject",
                      "deleteObject",
+                     "getObjectTagging",
+                     "putObjectTagging",
+                     "deleteObjectTagging",
                      "copyObject",
+                     "getBucketCors",
+                     "putBucketCors",
+                     "deleteBucketCors",
+                     "getBucketNotification",
+                     "putBucketNotification",
+                     "deleteBucketNotification",
                      "initiateMultipartUpload",
                      "uploadPart",
+                     "uploadPartCopy",
                      "completeMultipartUpload",
                      "abortMultipartUpload",
                      "listParts",
@@ -45,6 +61,9 @@ public sealed class SdkSpecTests
         Assert.True(File.Exists(Path.Combine(fixtures, "addressing.json")));
         Assert.True(File.Exists(Path.Combine(fixtures, "list-buckets.xml")));
         Assert.True(File.Exists(Path.Combine(fixtures, "list-objects-v2.xml")));
+        Assert.True(File.Exists(Path.Combine(fixtures, "list-object-versions.xml")));
+        Assert.True(File.Exists(Path.Combine(fixtures, "bucket-versioning.xml")));
+        Assert.True(File.Exists(Path.Combine(fixtures, "bucket-lifecycle.xml")));
         Assert.True(File.Exists(Path.Combine(fixtures, "error-access-denied.xml")));
     }
 
@@ -60,6 +79,8 @@ public sealed class SdkSpecTests
         Assert.Contains("contentRange: \"bytes */{object-length}\"", yaml);
         Assert.Contains("minimumNonFinalPartBytes: 5242880", yaml);
         Assert.Contains("defaultSdkPartBytes: 16777216", yaml);
+        Assert.Contains("deleteMarker: true", yaml);
+        Assert.Contains("AbortIncompleteMultipartUpload.DaysAfterInitiation", yaml);
     }
 
     private static string FindRepoRoot()

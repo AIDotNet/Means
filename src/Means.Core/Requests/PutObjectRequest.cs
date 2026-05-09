@@ -11,4 +11,5 @@ public sealed record PutObjectRequest(
     string ContentType,
     IReadOnlyDictionary<string, string> Metadata,
     string? CacheControl,
-    string? ContentDisposition);
+    string? ContentDisposition,
+    string? IdempotencyKey = null);

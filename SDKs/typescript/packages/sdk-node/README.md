@@ -48,6 +48,13 @@ const getUrl = client.createPresignedGetUrl({
   expiresIn: 900
 });
 
+const versionedGetUrl = client.createPresignedGetUrl({
+  bucket: "assets",
+  key: "app/main.js",
+  versionId: "object-version-id",
+  expiresIn: 900
+});
+
 const putUrl = client.createPresignedPutUrl({
   bucket: "assets",
   key: "uploads/new-file.bin",
@@ -79,3 +86,15 @@ await client.uploadFileMultipart({
 ```
 
 `uploadFileMultipart` streams the file in 16 MiB parts by default and aborts the upload on failure. `uploadBufferMultipart` is available for `Buffer`/`Uint8Array` bodies.
+
+## Versioning and lifecycle
+
+`MeansNodeClient` inherits the shared SDK methods for bucket versioning, object version listing, versioned object reads/deletes, lifecycle configuration, object tagging, CORS, notification, and `UploadPartCopy`:
+
+```ts
+await client.setBucketVersioning({ bucket: "assets", status: "Enabled" });
+const versions = await client.listObjectVersions({ bucket: "assets", prefix: "app/" });
+await client.getObject({ bucket: "assets", key: "app/main.js", versionId: versions.versions[0].versionId });
+await client.putObjectTagging({ bucket: "assets", key: "app/main.js", tags: { app: "web" } });
+await client.deleteBucketLifecycle({ bucket: "assets" });
+```

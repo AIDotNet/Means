@@ -1,7 +1,76 @@
-﻿services:
+name: means-single
+
+services:
   means:
-    image: means
+    image: hejiale010426/means
     build:
       context: .
       dockerfile: src/Means/Dockerfile
+    container_name: means
+    restart: unless-stopped
+    user: "0:0"
+    ports:
+      - "${MEANS_HTTP_PORT:-5178}:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: "${ASPNETCORE_ENVIRONMENT:-Production}"
+      ASPNETCORE_URLS: "http://+:8080"
+      AllowedHosts: "*"
 
+      Means__S3__ServiceHost: "${MEANS_S3_SERVICE_HOST:-localhost}"
+      Means__S3__DomainSuffix: "${MEANS_S3_DOMAIN_SUFFIX:-means.local}"
+      Means__S3__AliasPrefix: "/s3"
+
+      Means__Storage__Backend: "XlFs"
+      Means__Storage__DatabasePath: "/data/legacy/means.db"
+      Means__Storage__ObjectsPath: "/data/objects"
+      Means__Storage__Disks__0: "/data/xlfs/disk1"
+      Means__Storage__Disks__1: "/data/xlfs/disk2"
+      Means__Storage__Disks__2: "/data/xlfs/disk3"
+      Means__Storage__Disks__3: "/data/xlfs/disk4"
+      Means__Storage__DeploymentId: "${MEANS_DEPLOYMENT_ID:-means-local-single}"
+      Means__Storage__SetId: "set-1"
+      Means__Storage__ErasureDataShards: "2"
+      Means__Storage__ErasureParityShards: "2"
+      Means__Storage__WriteQuorum: "3"
+      Means__Storage__ReadQuorum: "1"
+      Means__Storage__MetaSyncMode: "${MEANS_META_SYNC_MODE:-Always}"
+      Means__Storage__AllowNewFormatWithExistingSqlite: "false"
+      Means__Storage__VerifyChecksumOnRead: "${MEANS_VERIFY_CHECKSUM_ON_READ:-false}"
+      Means__Storage__DefaultAccessKey: "${MEANS_ACCESS_KEY:-meansadmin}"
+      Means__Storage__DefaultSecretKey: "${MEANS_SECRET_KEY:-meansadmin-local-secret}"
+      Means__Storage__MultipartUploadCleanupAgeHours: "24"
+      Means__Storage__MultipartUploadCleanupIntervalMinutes: "60"
+
+      Means__Cluster__ClusterId: "local"
+      Means__Cluster__ClusterName: "Local Means Cluster"
+      Means__Cluster__NodeId: "means-single"
+      Means__Cluster__NodeEndpoint: "http://localhost:${MEANS_HTTP_PORT:-5178}"
+      Means__Cluster__PoolId: "pool-1"
+      Means__Cluster__PoolName: "Pool 1"
+      Means__Cluster__ObjectDiskId: "means-single-objects"
+
+      Means__RequestLimits__MaxUploadSizeBytes: "${MEANS_MAX_UPLOAD_SIZE_BYTES:-1073741824}"
+      Means__RequestLimits__MaxConcurrentUploadRequests: "${MEANS_MAX_CONCURRENT_UPLOADS:-64}"
+
+      Means__RateLimits__Enabled: "${MEANS_RATE_LIMITS_ENABLED:-true}"
+      Means__Telemetry__Enabled: "${MEANS_TELEMETRY_ENABLED:-false}"
+      Means__Telemetry__OtlpEndpoint: "${MEANS_OTLP_ENDPOINT:-}"
+
+      Means__Console__AdminUser: "${MEANS_CONSOLE_ADMIN_USER:-meansadmin}"
+      Means__Console__AdminPassword: "${MEANS_CONSOLE_ADMIN_PASSWORD:-meansadmin-local}"
+      Means__Console__SessionHours: "${MEANS_CONSOLE_SESSION_HOURS:-8}"
+    volumes:
+      - means-objects:/data/objects
+      - means-legacy:/data/legacy
+      - means-xlfs-disk1:/data/xlfs/disk1
+      - means-xlfs-disk2:/data/xlfs/disk2
+      - means-xlfs-disk3:/data/xlfs/disk3
+      - means-xlfs-disk4:/data/xlfs/disk4
+
+volumes:
+  means-objects:
+  means-legacy:
+  means-xlfs-disk1:
+  means-xlfs-disk2:
+  means-xlfs-disk3:
+  means-xlfs-disk4:

@@ -11,6 +11,10 @@ public interface IConsoleStore
 
     Task<IReadOnlyList<BucketUsageInfo>> ListBucketUsageAsync(CancellationToken cancellationToken);
 
+    Task<ClusterDiagnostics> GetClusterDiagnosticsAsync(
+        DateTimeOffset offlineBeforeUtc,
+        CancellationToken cancellationToken);
+
     Task<BucketConsoleSummary> GetBucketSummaryAsync(
         string bucketName,
         DateTimeOffset startUtc,

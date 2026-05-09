@@ -5,6 +5,7 @@ namespace Means.Core;
 /// </summary>
 public sealed record ListMultipartUploadsOptions(
     string? Prefix,
+    string? Delimiter,
     string? KeyMarker,
     string? UploadIdMarker,
     int MaxUploads);

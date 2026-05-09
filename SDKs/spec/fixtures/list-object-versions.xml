@@ -1,0 +1,24 @@
+﻿<ListVersionsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Name>photos</Name>
+  <Prefix>2026/</Prefix>
+  <KeyMarker />
+  <VersionIdMarker />
+  <MaxKeys>1000</MaxKeys>
+  <Delimiter />
+  <IsTruncated>false</IsTruncated>
+  <Version>
+    <Key>2026/image.jpg</Key>
+    <VersionId>11111111111111111111111111111111</VersionId>
+    <IsLatest>true</IsLatest>
+    <LastModified>2026-05-09T00:00:00.000Z</LastModified>
+    <ETag>"d41d8cd98f00b204e9800998ecf8427e"</ETag>
+    <Size>1024</Size>
+    <StorageClass>STANDARD</StorageClass>
+  </Version>
+  <DeleteMarker>
+    <Key>2026/old.jpg</Key>
+    <VersionId>22222222222222222222222222222222</VersionId>
+    <IsLatest>true</IsLatest>
+    <LastModified>2026-05-09T01:00:00.000Z</LastModified>
+  </DeleteMarker>
+</ListVersionsResult>

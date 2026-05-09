@@ -1,0 +1,698 @@
+{
+  "common": {
+    "brand": {
+      "consoleName": "Means 控制台",
+      "productName": "Means"
+    },
+    "actions": {
+      "add": "添加",
+      "copy": "复制",
+      "download": "下载",
+      "reload": "重新加载",
+      "save": "保存",
+      "cancel": "取消",
+      "close": "关闭",
+      "copied": "已复制",
+      "create": "创建",
+      "delete": "删除",
+      "refresh": "刷新",
+      "upload": "上传"
+    },
+    "states": {
+      "notConfigured": "未配置"
+    }
+  },
+  "app": {
+    "requestFailed": "请求失败",
+    "checkingSession": "正在检查登录状态...",
+    "loadingPage": "正在加载页面...",
+    "toast": {
+      "loginSuccess": "登录成功",
+      "logoutSuccess": "已退出登录"
+    }
+  },
+  "api": {
+    "requestFailed": "请求失败"
+  },
+  "appShell": {
+    "actions": {
+      "collapseSidebar": "收起菜单",
+      "expandSidebar": "展开菜单",
+      "toggleTheme": "切换主题"
+    },
+    "aria": {
+      "currentPosition": "当前位置",
+      "mainNav": "主导航"
+    },
+    "badges": {
+      "singleNode": "单节点"
+    },
+    "nav": {
+      "accessKeys": "访问密钥",
+      "audit": "审计",
+      "buckets": "桶",
+      "dashboard": "仪表盘",
+      "settings": "设置",
+      "cluster": "集群",
+      "health": "健康"
+    },
+    "search": {
+      "open": "打开搜索",
+      "placeholder": "搜索页面、桶或操作"
+    },
+    "userMenu": {
+      "currentUser": "当前用户",
+      "logout": "退出登录",
+      "settings": "设置"
+    }
+  },
+  "accessKeyDialog": {
+    "actions": {
+      "copySecret": "复制 Secret"
+    },
+    "description": "请立即保存 Secret Key，关闭后将无法再次查看。",
+    "labels": {
+      "accessKey": "Access Key",
+      "secretKey": "Secret Key"
+    },
+    "title": "访问密钥已创建",
+    "toast": {
+      "secretCopied": "Secret Key 已复制"
+    }
+  },
+  "accessKeys": {
+    "actions": {
+      "create": "创建访问密钥",
+      "creating": "创建中..."
+    },
+    "deleteDialog": {
+      "description": "删除访问密钥后，使用该密钥的 S3 请求将无法继续认证。",
+      "title": "删除访问密钥"
+    },
+    "errors": {
+      "createFailed": "创建访问密钥失败",
+      "deleteFailed": "删除访问密钥失败",
+      "loadFailed": "加载访问密钥失败"
+    },
+    "form": {
+      "customAccessKeyLabel": "自定义 Access Key（可选）",
+      "customAccessKeyPlaceholder": "留空则自动生成"
+    },
+    "page": {
+      "description": "创建和管理用于 S3 API 认证的访问密钥。",
+      "eyebrow": "身份认证",
+      "title": "访问密钥"
+    },
+    "table": {
+      "columns": {
+        "accessKey": "Access Key",
+        "createdAt": "创建时间",
+        "status": "状态"
+      },
+      "states": {
+        "empty": "暂无访问密钥",
+        "loading": "加载中..."
+      },
+      "status": {
+        "disabled": "已禁用",
+        "enabled": "已启用"
+      }
+    },
+    "toast": {
+      "deleted": "访问密钥已删除"
+    }
+  },
+  "audit": {
+    "errors": {
+      "loadFailed": "加载审计记录失败"
+    },
+    "page": {
+      "description": "查看控制台操作、资源变更和执行结果。",
+      "eyebrow": "安全",
+      "title": "审计日志"
+    }
+  },
+  "auditTimeline": {
+    "empty": "暂无审计记录"
+  },
+  "bucketDetail": {
+    "errors": {
+      "deletePolicyFailed": "删除策略失败",
+      "refreshBucketInfoFailed": "刷新桶信息失败",
+      "refreshFailed": "刷新失败",
+      "reloadSettingsFailed": "重新加载设置失败",
+      "savePolicyFailed": "保存策略失败",
+      "saveSettingsFailed": "保存设置失败"
+    },
+    "metrics": {
+      "defaultHeaders": "默认头",
+      "errors24h": "24h 错误",
+      "objects": "对象",
+      "requests24h": "24h 请求",
+      "stored": "已存储"
+    },
+    "overview": {
+      "dataStatsDescription": "最近 24 小时的请求、错误和流量统计。",
+      "dataStatsTitle": "数据统计",
+      "defaultResponseConfigDescription": "对象响应会自动附加的默认 Header 和 Metadata。",
+      "defaultResponseConfigTitle": "默认响应配置",
+      "metadata": "Metadata",
+      "noRequests": "暂无请求",
+      "responseHeaders": "响应 Header"
+    },
+    "page": {
+      "description": "查看对象、访问策略、默认响应头和桶级统计。",
+      "eyebrow": "Bucket",
+      "title": "桶详情"
+    },
+    "tabs": {
+      "objects": "对象",
+      "overview": "概览",
+      "policy": "策略",
+      "settings": "设置",
+      "versions": "版本",
+      "lifecycle": "生命周期"
+    },
+    "toast": {
+      "policyDeleted": "策略已删除",
+      "policySaved": "策略已保存",
+      "settingsSaved": "设置已保存"
+    },
+    "versions": {
+      "prefix": "前缀",
+      "nextPage": "下一页",
+      "loading": "正在加载版本...",
+      "empty": "当前前缀下没有对象版本",
+      "columns": {
+        "key": "对象 Key",
+        "version": "版本 ID",
+        "state": "状态",
+        "size": "大小",
+        "updatedAt": "更新时间"
+      },
+      "badges": {
+        "latest": "最新",
+        "object": "对象",
+        "deleteMarker": "删除标记"
+      },
+      "actions": {
+        "download": "下载"
+      },
+      "toast": {
+        "deleted": "版本已删除"
+      },
+      "errors": {
+        "loadFailed": "加载对象版本失败",
+        "downloadFailed": "下载该版本失败",
+        "deleteFailed": "删除该版本失败"
+      }
+    },
+    "lifecycle": {
+      "versioningTitle": "Bucket 版本控制",
+      "versioningDescription": "控制写入是否生成不可变对象版本和删除标记。",
+      "versioningStatus": "版本控制状态",
+      "versioningHint": "Enabled 会把每次写入保留为版本。Suspended 会停止创建新的受保护版本，但已有版本仍可按 versionId 访问。",
+      "rulesTitle": "生命周期规则",
+      "rulesDescription": "以 JSON 编辑生命周期规则。规则为空时会删除生命周期配置。",
+      "ruleCount": "{{count}} 条规则",
+      "rulesAria": "生命周期规则 JSON",
+      "rulesHint": "字段：id、status、prefix、expirationDays、noncurrentVersionExpirationDays、abortIncompleteMultipartUploadDays。天数字段必须是正整数或 null。",
+      "deleteRules": "删除规则",
+      "toast": {
+        "saved": "生命周期设置已保存",
+        "deleted": "生命周期规则已删除"
+      },
+      "errors": {
+        "loadFailed": "加载生命周期设置失败",
+        "saveFailed": "保存生命周期设置失败",
+        "deleteFailed": "删除生命周期规则失败"
+      }
+    }
+  },
+  "buckets": {
+    "actions": {
+      "create": "创建桶",
+      "creating": "创建中..."
+    },
+    "createDialog": {
+      "description": "创建一个新的对象存储桶，名称需要满足 S3 bucket 命名规则。",
+      "nameLabel": "桶名称",
+      "title": "创建桶"
+    },
+    "deleteDialog": {
+      "description": "删除桶会移除桶配置和其中对象。此操作不可撤销。",
+      "title": "删除桶"
+    },
+    "errors": {
+      "createFailed": "创建桶失败",
+      "deleteFailed": "删除桶失败",
+      "loadFailed": "加载桶列表失败"
+    },
+    "page": {
+      "description": "管理当前节点上的 S3 bucket、对象数量和容量。",
+      "eyebrow": "对象存储",
+      "title": "桶"
+    },
+    "toast": {
+      "created": "桶已创建",
+      "deleted": "桶已删除"
+    }
+  },
+  "bucketTable": {
+    "actions": {
+      "deleteBucket": "删除桶",
+      "openObjects": "打开对象"
+    },
+    "aria": {
+      "openActionsMenu": "打开操作菜单"
+    },
+    "columns": {
+      "bucket": "桶",
+      "createdAt": "创建时间",
+      "objectCount": "对象数",
+      "size": "容量"
+    },
+    "footer": {
+      "namingRule": "Bucket 名称需符合 S3 命名规则"
+    },
+    "states": {
+      "empty": "暂无桶",
+      "loading": "加载中..."
+    }
+  },
+  "commandSearch": {
+    "bucketDescription": "{{count}} 个对象",
+    "description": "快速跳转到页面或对象桶。",
+    "emptyBuckets": "没有匹配的桶",
+    "emptyPages": "没有匹配的页面",
+    "inputPlaceholder": "输入页面、桶或关键词",
+    "routes": {
+      "accessKeys": {
+        "description": "管理 S3 访问密钥。",
+        "keywords": "access key secret api credential",
+        "label": "访问密钥"
+      },
+      "audit": {
+        "description": "查看控制台操作审计记录。",
+        "keywords": "audit log history",
+        "label": "审计"
+      },
+      "buckets": {
+        "description": "查看和管理 bucket。",
+        "keywords": "bucket object storage",
+        "label": "桶"
+      },
+      "dashboard": {
+        "description": "查看容量、请求和流量指标。",
+        "keywords": "dashboard stats metrics",
+        "label": "仪表盘"
+      },
+      "settings": {
+        "description": "查看节点和控制台设置。",
+        "keywords": "settings config preferences",
+        "label": "设置"
+      },
+      "cluster": {
+        "label": "集群",
+        "description": "查看集群拓扑、存储池、节点和维护任务。",
+        "keywords": "cluster node pool topology maintenance repair rebalance replication 集群 节点 存储池 修复 均衡 复制"
+      },
+      "health": {
+        "label": "健康",
+        "description": "查看节点、磁盘、副本和修复队列健康状态。",
+        "keywords": "health disk node replica repair queue scrub diagnostics 健康 磁盘 节点 副本 修复 诊断"
+      }
+    },
+    "sections": {
+      "buckets": "桶",
+      "pages": "页面"
+    },
+    "title": "命令搜索"
+  },
+  "dashboard": {
+    "buckets": {
+      "empty": "当前时间范围内暂无 bucket 请求。",
+      "live": "实时",
+      "metrics": {
+        "buckets": "桶数",
+        "objects": "对象",
+        "size": "容量"
+      },
+      "objectCount": "{{count}} 对象",
+      "recentActivity": "最近活动",
+      "recentLine": "{{requests}} 请求 · {{errors}} 错误 · {{relative}}",
+      "title": "桶"
+    },
+    "capacity": {
+      "available": "可用空间",
+      "donutTitle": "容量使用率 {{percent}}%",
+      "objectData": "对象数据",
+      "title": "容量",
+      "usedCapacity": "已用容量"
+    },
+    "charts": {
+      "data": {
+        "egress": "出站",
+        "ingress": "入站",
+        "svgTitle": "每小时入站和出站流量柱形图",
+        "title": "传输流量 (24h)"
+      },
+      "errors": {
+        "svgTitle": "每小时 API 错误柱形图",
+        "title": "API 错误 (24h)",
+        "tooltip": "{{hour}}: {{count}} 错误"
+      },
+      "requests": "请求",
+      "totalValue": "合计 {{value}}"
+    },
+    "errors": {
+      "refreshFailed": "刷新统计失败"
+    },
+    "pool": {
+      "capacity": "容量",
+      "drives": "路径",
+      "objectData": "对象数据"
+    },
+    "relative": {
+      "hoursAgo": "{{count}}h ago",
+      "justNow": "刚刚",
+      "minutesAgo": "{{count}}m ago",
+      "noRecentRequest": "暂无请求"
+    },
+    "status": {
+      "drives": "本地路径",
+      "offline": "离线",
+      "online": "在线",
+      "servers": "服务节点"
+    },
+    "subtitle": "最近 {{hours}} 小时的存储容量、请求和流量统计。"
+  },
+  "bucketSettings": {
+    "actions": {
+      "save": "保存设置",
+      "saving": "保存中..."
+    },
+    "description": "为桶内对象响应自动附加 Header 和 Metadata。",
+    "fields": {
+      "namePlaceholder": "名称",
+      "valuePlaceholder": "值"
+    },
+    "headers": {
+      "description": "例如 Cache-Control、Content-Disposition。",
+      "empty": "暂无默认 Header",
+      "title": "Response Headers"
+    },
+    "metadata": {
+      "description": "保存时不需要填写 x-amz-meta- 前缀。",
+      "empty": "暂无默认 Metadata",
+      "title": "Metadata"
+    },
+    "title": "默认响应配置"
+  },
+  "objectBrowser": {
+    "actions": {
+      "menuAria": "{{objectKey}} 操作",
+      "parent": "上一级",
+      "viewDetails": "查看详情"
+    },
+    "copyDialog": {
+      "description": "输入目标 Object Key，复制会保留对象内容和元数据。",
+      "destinationKey": "目标 Object Key",
+      "title": "复制对象"
+    },
+    "deleteDialog": {
+      "description": "删除后无法恢复，请确认对象 Key。",
+      "title": "删除对象"
+    },
+    "detail": {
+      "emptyMetadata": "无 Metadata",
+      "lastModified": "更新时间",
+      "metadata": "Metadata",
+      "size": "大小",
+      "title": "对象详情"
+    },
+    "errors": {
+      "copyFailed": "复制对象失败",
+      "deleteFailed": "删除对象失败",
+      "loadDetailFailed": "读取对象详情失败",
+      "loadFailed": "加载对象失败",
+      "presignDownloadFailed": "生成下载链接失败",
+      "uploadFailed": "上传对象失败"
+    },
+    "filters": {
+      "prefix": "Prefix",
+      "search": "Search",
+      "searchPlaceholder": "按 Object Key 过滤"
+    },
+    "table": {
+      "columns": {
+        "objectKey": "Object Key",
+        "size": "大小",
+        "type": "类型",
+        "updatedAt": "更新时间"
+      },
+      "folder": "Folder",
+      "states": {
+        "empty": "当前路径暂无对象",
+        "loading": "加载中..."
+      }
+    },
+    "toast": {
+      "copied": "对象已复制",
+      "deleted": "对象已删除",
+      "uploaded": "对象已上传"
+    }
+  },
+  "settings": {
+    "errors": {
+      "invalidUploadLimit": "请输入有效的上传上限",
+      "rangeLimit": "可配置范围是 {{min}} - {{max}}",
+      "saveFailed": "保存失败"
+    },
+    "page": {
+      "description": "查看控制台、S3 endpoint、路径式访问和静态文件压缩策略。",
+      "eyebrow": "Settings",
+      "title": "系统设置"
+    },
+    "sections": {
+      "architecture": {
+        "currentMode": "当前运行模式是单站点 SQLite + filesystem baseline。",
+        "futureAbstraction": "server pool、erasure set、healing/scrub 是后续分布式演进抽象。",
+        "title": "架构预留"
+      },
+      "compression": {
+        "badges": {
+          "rangeNoCompression": "Range 禁用压缩",
+          "weakEtag": "压缩响应使用弱 ETag"
+        },
+        "title": "压缩与缓存"
+      },
+      "endpoints": {
+        "consoleAlias": "Console /s3 Alias",
+        "title": "访问地址"
+      },
+      "localStorage": {
+        "objectBlobs": "Object Blobs",
+        "sqliteMetadata": "SQLite Metadata",
+        "title": "本地存储",
+        "version": "Version"
+      },
+      "uploadLimits": {
+        "current": "当前 {{value}}",
+        "inputLabel": "单次上传上限 (MiB)",
+        "range": "范围 {{min}} - {{max}}",
+        "title": "上传限制"
+      }
+    },
+    "toast": {
+      "copied": "已复制",
+      "saved": "设置已保存"
+    }
+  },
+  "policyEditor": {
+    "actions": {
+      "deletePolicy": "删除策略",
+      "format": "格式化",
+      "publicReadTemplate": "公开读取模板",
+      "savePolicy": "保存策略"
+    },
+    "description": "编辑兼容 S3 bucket policy 的 JSON 文档。",
+    "errors": {
+      "invalidForFormat": "当前内容不是有效 JSON，无法格式化。",
+      "invalidForSave": "策略不是有效 JSON，无法保存。"
+    },
+    "title": "Bucket Policy"
+  },
+  "transfer": {
+    "uploadConnectionFailed": "上传连接失败",
+    "uploadHttpFailed": "上传失败：HTTP {{status}}"
+  },
+  "uploadDialog": {
+    "description": "对象会通过同源 /s3 预签名地址上传，浏览器不会接触 SecretKey。",
+    "dropzone": {
+      "emptyHint": "单次上传一个本地文件",
+      "fileSelected": "{{name}} · {{size}}",
+      "title": "拖拽文件到此处，或点击选择"
+    },
+    "objectKeyLabel": "Object Key",
+    "title": "上传对象"
+  },
+  "login": {
+    "error": {
+      "fallback": "登录失败",
+      "title": "无法登录"
+    },
+    "form": {
+      "description": "使用管理员账号进入 Means 控制台。",
+      "passwordLabel": "密码",
+      "submit": "登录",
+      "submitting": "登录中...",
+      "title": "管理员登录",
+      "userNameLabel": "用户名"
+    },
+    "sidebar": {
+      "badge": "S3 兼容对象存储",
+      "description": "管理桶、对象、访问密钥和请求统计，适用于单节点 Means 部署。",
+      "footnote": "本地控制台 · 单节点模式",
+      "subtitle": "Admin Console",
+      "title": "对象存储的本地管理界面"
+    }
+  },
+  "cluster": {
+    "page": {
+      "eyebrow": "控制面",
+      "title": "集群状态",
+      "description": "查看拓扑、容量、存储池，并统一控制维护任务。"
+    },
+    "errors": {
+      "loadFailed": "加载集群状态失败"
+    },
+    "metrics": {
+      "nodes": "节点",
+      "pools": "存储池",
+      "capacity": "容量",
+      "tasks": "任务",
+      "onlineOffline": "{{online}} 在线 / {{offline}} 离线",
+      "disks": "{{online}} 块磁盘在线 / {{offline}} 块离线",
+      "available": "可用 {{value}}",
+      "taskHealth": "{{running}} 运行中 / {{failed}} 失败"
+    },
+    "nodes": {
+      "title": "节点",
+      "loading": "正在加载节点...",
+      "empty": "暂无已注册节点",
+      "columns": {
+        "node": "节点",
+        "endpoint": "Endpoint",
+        "disks": "磁盘",
+        "lastHeartbeat": "最近心跳",
+        "status": "状态"
+      }
+    },
+    "pools": {
+      "title": "存储池",
+      "empty": "暂无已注册存储池",
+      "meta": "{{nodes}} 个节点 / {{disks}} 块磁盘",
+      "used": "已用 {{value}}",
+      "available": "可用 {{value}}"
+    },
+    "tasks": {
+      "count": "{{count}} 个任务",
+      "runNow": "立即运行",
+      "runSucceeded": "{{task}} 已完成",
+      "runFailed": "运行后台任务失败",
+      "interval": "间隔",
+      "seconds": "{{seconds}} 秒",
+      "successFailure": "成功 / 失败",
+      "lastRun": "最近运行"
+    },
+    "status": {
+      "online": "在线",
+      "offline": "离线",
+      "neverrun": "未运行",
+      "running": "运行中",
+      "succeeded": "成功",
+      "failed": "失败",
+      "cancelled": "已取消"
+    }
+  },
+  "health": {
+    "page": {
+      "eyebrow": "运维",
+      "title": "节点与磁盘健康",
+      "description": "查看磁盘状态、副本完整性、修复队列和维护任务执行情况。"
+    },
+    "errors": {
+      "loadFailed": "加载健康诊断失败"
+    },
+    "metrics": {
+      "overall": "整体",
+      "healthy": "健康",
+      "unhealthyDetail": "离线资源、欠副本对象或失败修复",
+      "disks": "磁盘",
+      "onlineOffline": "{{online}} 在线 / {{offline}} 离线",
+      "replicas": "副本",
+      "missingReplicaFiles": "缺失副本文件",
+      "repairQueue": "修复队列",
+      "failedRepairs": "{{count}} 个失败修复"
+    },
+    "disks": {
+      "title": "磁盘与节点",
+      "count": "{{count}} 块磁盘",
+      "loading": "正在加载磁盘...",
+      "empty": "暂无已注册磁盘",
+      "columns": {
+        "disk": "磁盘",
+        "node": "节点 / 存储池",
+        "capacity": "容量",
+        "available": "可用",
+        "lastSeen": "最近上报",
+        "status": "状态"
+      }
+    },
+    "diagnostics": {
+      "title": "诊断",
+      "replicaTitle": "副本完整性",
+      "desiredReplicas": "目标副本数",
+      "replicaRecords": "副本记录",
+      "underReplicated": "欠副本",
+      "withoutManifest": "缺失清单",
+      "repairTitle": "修复队列",
+      "pending": "待处理",
+      "completed": "已完成",
+      "failed": "失败",
+      "retryable": "可重试",
+      "ecTitle": "纠删码",
+      "ecProfiles": "Profile",
+      "ecEnabled": "已启用",
+      "ecDisabled": "已禁用"
+    },
+    "tasks": {
+      "title": "维护控制",
+      "count": "{{count}} 个任务",
+      "runNow": "立即运行",
+      "runSucceeded": "{{task}} 已完成",
+      "runFailed": "运行后台任务失败",
+      "interval": "{{seconds}} 秒间隔",
+      "successes": "{{count}} 次成功",
+      "neverRun": "未运行",
+      "historyTitle": "最近维护运行",
+      "historyCount": "{{count}} 次运行",
+      "historyEmpty": "暂无维护任务运行记录",
+      "historyTask": "任务",
+      "historyStatus": "状态",
+      "historyCompleted": "完成时间",
+      "historyDuration": "耗时",
+      "historyResult": "结果"
+    },
+    "status": {
+      "online": "在线",
+      "offline": "离线",
+      "neverrun": "未运行",
+      "running": "运行中",
+      "succeeded": "成功",
+      "failed": "失败",
+      "cancelled": "已取消"
+    }
+  }
+}

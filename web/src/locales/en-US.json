@@ -1,0 +1,698 @@
+{
+  "common": {
+    "brand": {
+      "consoleName": "Means Console",
+      "productName": "Means"
+    },
+    "actions": {
+      "add": "Add",
+      "cancel": "Cancel",
+      "close": "Close",
+      "copy": "Copy",
+      "copied": "Copied",
+      "create": "Create",
+      "delete": "Delete",
+      "download": "Download",
+      "refresh": "Refresh",
+      "reload": "Reload",
+      "save": "Save",
+      "upload": "Upload"
+    },
+    "states": {
+      "notConfigured": "Not configured"
+    }
+  },
+  "app": {
+    "requestFailed": "Request failed",
+    "checkingSession": "Checking session...",
+    "loadingPage": "Loading page...",
+    "toast": {
+      "loginSuccess": "Signed in",
+      "logoutSuccess": "Signed out"
+    }
+  },
+  "api": {
+    "requestFailed": "Request failed"
+  },
+  "appShell": {
+    "actions": {
+      "collapseSidebar": "Collapse menu",
+      "expandSidebar": "Expand menu",
+      "toggleTheme": "Toggle theme"
+    },
+    "aria": {
+      "currentPosition": "Current position",
+      "mainNav": "Main navigation"
+    },
+    "badges": {
+      "singleNode": "Single node"
+    },
+    "nav": {
+      "accessKeys": "Access keys",
+      "audit": "Audit",
+      "buckets": "Buckets",
+      "dashboard": "Dashboard",
+      "settings": "Settings",
+      "cluster": "Cluster",
+      "health": "Health"
+    },
+    "search": {
+      "open": "Open search",
+      "placeholder": "Search pages, buckets, or actions"
+    },
+    "userMenu": {
+      "currentUser": "Current user",
+      "logout": "Sign out",
+      "settings": "Settings"
+    }
+  },
+  "accessKeyDialog": {
+    "actions": {
+      "copySecret": "Copy secret"
+    },
+    "description": "Save the secret key now. It cannot be viewed again after closing this dialog.",
+    "labels": {
+      "accessKey": "Access Key",
+      "secretKey": "Secret Key"
+    },
+    "title": "Access key created",
+    "toast": {
+      "secretCopied": "Secret key copied"
+    }
+  },
+  "accessKeys": {
+    "actions": {
+      "create": "Create access key",
+      "creating": "Creating..."
+    },
+    "deleteDialog": {
+      "description": "After deletion, S3 requests using this key will no longer authenticate.",
+      "title": "Delete access key"
+    },
+    "errors": {
+      "createFailed": "Failed to create access key",
+      "deleteFailed": "Failed to delete access key",
+      "loadFailed": "Failed to load access keys"
+    },
+    "form": {
+      "customAccessKeyLabel": "Custom Access Key (optional)",
+      "customAccessKeyPlaceholder": "Leave blank to auto-generate"
+    },
+    "page": {
+      "description": "Create and manage access keys used for S3 API authentication.",
+      "eyebrow": "Identity",
+      "title": "Access keys"
+    },
+    "table": {
+      "columns": {
+        "accessKey": "Access Key",
+        "createdAt": "Created",
+        "status": "Status"
+      },
+      "states": {
+        "empty": "No access keys",
+        "loading": "Loading..."
+      },
+      "status": {
+        "disabled": "Disabled",
+        "enabled": "Enabled"
+      }
+    },
+    "toast": {
+      "deleted": "Access key deleted"
+    }
+  },
+  "audit": {
+    "errors": {
+      "loadFailed": "Failed to load audit records"
+    },
+    "page": {
+      "description": "Review console operations, resource changes, and execution results.",
+      "eyebrow": "Security",
+      "title": "Audit log"
+    }
+  },
+  "auditTimeline": {
+    "empty": "No audit records"
+  },
+  "bucketDetail": {
+    "errors": {
+      "deletePolicyFailed": "Failed to delete policy",
+      "refreshBucketInfoFailed": "Failed to refresh bucket information",
+      "refreshFailed": "Refresh failed",
+      "reloadSettingsFailed": "Failed to reload settings",
+      "savePolicyFailed": "Failed to save policy",
+      "saveSettingsFailed": "Failed to save settings"
+    },
+    "metrics": {
+      "defaultHeaders": "Default headers",
+      "errors24h": "24h errors",
+      "objects": "Objects",
+      "requests24h": "24h requests",
+      "stored": "Stored"
+    },
+    "overview": {
+      "dataStatsDescription": "Request, error, and traffic statistics for the last 24 hours.",
+      "dataStatsTitle": "Data statistics",
+      "defaultResponseConfigDescription": "Default response headers and metadata automatically attached to object responses.",
+      "defaultResponseConfigTitle": "Default response config",
+      "metadata": "Metadata",
+      "noRequests": "No requests",
+      "responseHeaders": "Response headers"
+    },
+    "page": {
+      "description": "Inspect objects, access policy, default response headers, and bucket metrics.",
+      "eyebrow": "Bucket",
+      "title": "Bucket details"
+    },
+    "tabs": {
+      "objects": "Objects",
+      "overview": "Overview",
+      "policy": "Policy",
+      "settings": "Settings",
+      "versions": "Versions",
+      "lifecycle": "Lifecycle"
+    },
+    "toast": {
+      "policyDeleted": "Policy deleted",
+      "policySaved": "Policy saved",
+      "settingsSaved": "Settings saved"
+    },
+    "versions": {
+      "prefix": "Prefix",
+      "nextPage": "Next page",
+      "loading": "Loading versions...",
+      "empty": "No object versions match the current prefix",
+      "columns": {
+        "key": "Object key",
+        "version": "Version ID",
+        "state": "State",
+        "size": "Size",
+        "updatedAt": "Updated"
+      },
+      "badges": {
+        "latest": "Latest",
+        "object": "Object",
+        "deleteMarker": "Delete marker"
+      },
+      "actions": {
+        "download": "Download"
+      },
+      "toast": {
+        "deleted": "Version deleted"
+      },
+      "errors": {
+        "loadFailed": "Failed to load object versions",
+        "downloadFailed": "Failed to download this version",
+        "deleteFailed": "Failed to delete this version"
+      }
+    },
+    "lifecycle": {
+      "versioningTitle": "Bucket versioning",
+      "versioningDescription": "Controls whether writes create immutable object versions and delete markers.",
+      "versioningStatus": "Versioning status",
+      "versioningHint": "Enabled preserves every write as a version. Suspended stops creating new protected versions but keeps existing versions addressable.",
+      "rulesTitle": "Lifecycle rules",
+      "rulesDescription": "Edit lifecycle rules as JSON. Empty rules delete the lifecycle configuration.",
+      "ruleCount": "{{count}} rules",
+      "rulesAria": "Lifecycle rules JSON",
+      "rulesHint": "Fields: id, status, prefix, expirationDays, noncurrentVersionExpirationDays, abortIncompleteMultipartUploadDays. Day values must be positive integers or null.",
+      "deleteRules": "Delete rules",
+      "toast": {
+        "saved": "Lifecycle settings saved",
+        "deleted": "Lifecycle rules deleted"
+      },
+      "errors": {
+        "loadFailed": "Failed to load lifecycle settings",
+        "saveFailed": "Failed to save lifecycle settings",
+        "deleteFailed": "Failed to delete lifecycle rules"
+      }
+    }
+  },
+  "buckets": {
+    "actions": {
+      "create": "Create bucket",
+      "creating": "Creating..."
+    },
+    "createDialog": {
+      "description": "Create a new object storage bucket. The name must follow S3 bucket naming rules.",
+      "nameLabel": "Bucket name",
+      "title": "Create bucket"
+    },
+    "deleteDialog": {
+      "description": "Deleting a bucket removes its configuration and objects. This cannot be undone.",
+      "title": "Delete bucket"
+    },
+    "errors": {
+      "createFailed": "Failed to create bucket",
+      "deleteFailed": "Failed to delete bucket",
+      "loadFailed": "Failed to load buckets"
+    },
+    "page": {
+      "description": "Manage S3 buckets, object counts, and capacity on this node.",
+      "eyebrow": "Object storage",
+      "title": "Buckets"
+    },
+    "toast": {
+      "created": "Bucket created",
+      "deleted": "Bucket deleted"
+    }
+  },
+  "bucketTable": {
+    "actions": {
+      "deleteBucket": "Delete bucket",
+      "openObjects": "Open objects"
+    },
+    "aria": {
+      "openActionsMenu": "Open actions menu"
+    },
+    "columns": {
+      "bucket": "Bucket",
+      "createdAt": "Created",
+      "objectCount": "Objects",
+      "size": "Size"
+    },
+    "footer": {
+      "namingRule": "Bucket names must follow S3 naming rules"
+    },
+    "states": {
+      "empty": "No buckets",
+      "loading": "Loading..."
+    }
+  },
+  "commandSearch": {
+    "bucketDescription": "{{count}} objects",
+    "description": "Quickly jump to a page or bucket.",
+    "emptyBuckets": "No matching buckets",
+    "emptyPages": "No matching pages",
+    "inputPlaceholder": "Type a page, bucket, or keyword",
+    "routes": {
+      "accessKeys": {
+        "description": "Manage S3 access keys.",
+        "keywords": "access key secret api credential",
+        "label": "Access keys"
+      },
+      "audit": {
+        "description": "Review console operation audit records.",
+        "keywords": "audit log history",
+        "label": "Audit"
+      },
+      "buckets": {
+        "description": "View and manage buckets.",
+        "keywords": "bucket object storage",
+        "label": "Buckets"
+      },
+      "dashboard": {
+        "description": "View capacity, request, and traffic metrics.",
+        "keywords": "dashboard stats metrics",
+        "label": "Dashboard"
+      },
+      "settings": {
+        "description": "Inspect node and console settings.",
+        "keywords": "settings config preferences",
+        "label": "Settings"
+      },
+      "cluster": {
+        "label": "Cluster",
+        "description": "Inspect cluster topology, pools, nodes, and maintenance tasks.",
+        "keywords": "cluster node pool topology maintenance repair rebalance replication"
+      },
+      "health": {
+        "label": "Health",
+        "description": "Review node, disk, replica, and repair queue health.",
+        "keywords": "health disk node replica repair queue scrub diagnostics"
+      }
+    },
+    "sections": {
+      "buckets": "Buckets",
+      "pages": "Pages"
+    },
+    "title": "Command search"
+  },
+  "dashboard": {
+    "buckets": {
+      "empty": "No bucket requests in the current range.",
+      "live": "Live",
+      "metrics": {
+        "buckets": "Buckets",
+        "objects": "Objects",
+        "size": "Size"
+      },
+      "objectCount": "{{count}} objects",
+      "recentActivity": "Recent activity",
+      "recentLine": "{{requests}} requests · {{errors}} errors · {{relative}}",
+      "title": "Buckets"
+    },
+    "capacity": {
+      "available": "Available space",
+      "donutTitle": "Capacity usage {{percent}}%",
+      "objectData": "Object data",
+      "title": "Capacity",
+      "usedCapacity": "Used capacity"
+    },
+    "charts": {
+      "data": {
+        "egress": "Egress",
+        "ingress": "Ingress",
+        "svgTitle": "Hourly ingress and egress bar chart",
+        "title": "Data transfer (24h)"
+      },
+      "errors": {
+        "svgTitle": "Hourly API error bar chart",
+        "title": "API errors (24h)",
+        "tooltip": "{{hour}}: {{count}} errors"
+      },
+      "requests": "Requests",
+      "totalValue": "Total {{value}}"
+    },
+    "errors": {
+      "refreshFailed": "Failed to refresh statistics"
+    },
+    "pool": {
+      "capacity": "Capacity",
+      "drives": "Drives",
+      "objectData": "Object data"
+    },
+    "relative": {
+      "hoursAgo": "{{count}}h ago",
+      "justNow": "Just now",
+      "minutesAgo": "{{count}}m ago",
+      "noRecentRequest": "No recent requests"
+    },
+    "status": {
+      "drives": "Local paths",
+      "offline": "Offline",
+      "online": "Online",
+      "servers": "Service nodes"
+    },
+    "subtitle": "Storage capacity, requests, and traffic statistics for the last {{hours}} hours."
+  },
+  "policyEditor": {
+    "actions": {
+      "deletePolicy": "Delete policy",
+      "format": "Format",
+      "publicReadTemplate": "Public read template",
+      "savePolicy": "Save policy"
+    },
+    "description": "Edit the JSON document for an S3-compatible bucket policy.",
+    "errors": {
+      "invalidForFormat": "The current content is not valid JSON and cannot be formatted.",
+      "invalidForSave": "The policy is not valid JSON and cannot be saved."
+    },
+    "title": "Bucket Policy"
+  },
+  "transfer": {
+    "uploadConnectionFailed": "Upload connection failed",
+    "uploadHttpFailed": "Upload failed: HTTP {{status}}"
+  },
+  "uploadDialog": {
+    "description": "Objects upload through same-origin /s3 presigned URLs. SecretKey stays out of the browser.",
+    "dropzone": {
+      "emptyHint": "Upload one local file at a time",
+      "fileSelected": "{{name}} · {{size}}",
+      "title": "Drop a file here, or click to choose"
+    },
+    "objectKeyLabel": "Object Key",
+    "title": "Upload object"
+  },
+  "bucketSettings": {
+    "actions": {
+      "save": "Save settings",
+      "saving": "Saving..."
+    },
+    "description": "Automatically append response headers and metadata to object responses in this bucket.",
+    "fields": {
+      "namePlaceholder": "name",
+      "valuePlaceholder": "value"
+    },
+    "headers": {
+      "description": "For example: Cache-Control, Content-Disposition.",
+      "empty": "No default headers",
+      "title": "Response Headers"
+    },
+    "metadata": {
+      "description": "Do not include the x-amz-meta- prefix when saving.",
+      "empty": "No default metadata",
+      "title": "Metadata"
+    },
+    "title": "Default response config"
+  },
+  "objectBrowser": {
+    "actions": {
+      "menuAria": "{{objectKey}} actions",
+      "parent": "Parent",
+      "viewDetails": "View details"
+    },
+    "copyDialog": {
+      "description": "Enter the target object key. Copy keeps object content and metadata.",
+      "destinationKey": "Destination Object Key",
+      "title": "Copy object"
+    },
+    "deleteDialog": {
+      "description": "This action cannot be undone. Confirm the object key before deleting.",
+      "title": "Delete object"
+    },
+    "detail": {
+      "emptyMetadata": "No metadata",
+      "lastModified": "Last modified",
+      "metadata": "Metadata",
+      "size": "Size",
+      "title": "Object details"
+    },
+    "errors": {
+      "copyFailed": "Failed to copy object",
+      "deleteFailed": "Failed to delete object",
+      "loadDetailFailed": "Failed to load object detail",
+      "loadFailed": "Failed to load objects",
+      "presignDownloadFailed": "Failed to generate download link",
+      "uploadFailed": "Failed to upload object"
+    },
+    "filters": {
+      "prefix": "Prefix",
+      "search": "Search",
+      "searchPlaceholder": "Filter by object key"
+    },
+    "table": {
+      "columns": {
+        "objectKey": "Object Key",
+        "size": "Size",
+        "type": "Type",
+        "updatedAt": "Updated"
+      },
+      "folder": "Folder",
+      "states": {
+        "empty": "No objects in current path",
+        "loading": "Loading..."
+      }
+    },
+    "toast": {
+      "copied": "Object copied",
+      "deleted": "Object deleted",
+      "uploaded": "Object uploaded"
+    }
+  },
+  "settings": {
+    "errors": {
+      "invalidUploadLimit": "Enter a valid upload limit",
+      "rangeLimit": "Allowed range: {{min}} - {{max}}",
+      "saveFailed": "Failed to save settings"
+    },
+    "page": {
+      "description": "View console endpoint, path-style access, storage paths, and compression policy.",
+      "eyebrow": "Settings",
+      "title": "System settings"
+    },
+    "sections": {
+      "architecture": {
+        "currentMode": "Current mode is single-site SQLite + filesystem baseline.",
+        "futureAbstraction": "Server pool, erasure set, and healing/scrub are reserved for distributed evolution.",
+        "title": "Architecture reserved"
+      },
+      "compression": {
+        "badges": {
+          "rangeNoCompression": "Range disables compression",
+          "weakEtag": "Compressed responses use weak ETag"
+        },
+        "title": "Compression and cache"
+      },
+      "endpoints": {
+        "consoleAlias": "Console /s3 Alias",
+        "title": "Endpoints"
+      },
+      "localStorage": {
+        "objectBlobs": "Object Blobs",
+        "sqliteMetadata": "SQLite Metadata",
+        "title": "Local storage",
+        "version": "Version"
+      },
+      "uploadLimits": {
+        "current": "Current {{value}}",
+        "inputLabel": "Max upload size (MiB)",
+        "range": "Range {{min}} - {{max}}",
+        "title": "Upload limits"
+      }
+    },
+    "toast": {
+      "copied": "Copied",
+      "saved": "Settings saved"
+    }
+  },
+  "login": {
+    "error": {
+      "fallback": "Login failed",
+      "title": "Unable to sign in"
+    },
+    "form": {
+      "description": "Use the administrator account to enter Means Console.",
+      "passwordLabel": "Password",
+      "submit": "Sign in",
+      "submitting": "Signing in...",
+      "title": "Admin sign in",
+      "userNameLabel": "Username"
+    },
+    "sidebar": {
+      "badge": "S3-compatible object storage",
+      "description": "Manage buckets, objects, access keys, and request statistics for a single-node Means deployment.",
+      "footnote": "Local console · single-node mode",
+      "subtitle": "Admin Console",
+      "title": "Local management for object storage"
+    }
+  },
+  "cluster": {
+    "page": {
+      "eyebrow": "Control plane",
+      "title": "Cluster status",
+      "description": "Topology, capacity, storage pools, and unified maintenance task control."
+    },
+    "errors": {
+      "loadFailed": "Failed to load cluster status"
+    },
+    "metrics": {
+      "nodes": "Nodes",
+      "pools": "Pools",
+      "capacity": "Capacity",
+      "tasks": "Tasks",
+      "onlineOffline": "{{online}} online / {{offline}} offline",
+      "disks": "{{online}} disks online / {{offline}} offline",
+      "available": "{{value}} available",
+      "taskHealth": "{{running}} running / {{failed}} failed"
+    },
+    "nodes": {
+      "title": "Nodes",
+      "loading": "Loading nodes...",
+      "empty": "No registered nodes",
+      "columns": {
+        "node": "Node",
+        "endpoint": "Endpoint",
+        "disks": "Disks",
+        "lastHeartbeat": "Last heartbeat",
+        "status": "Status"
+      }
+    },
+    "pools": {
+      "title": "Storage pools",
+      "empty": "No storage pools registered",
+      "meta": "{{nodes}} nodes / {{disks}} disks",
+      "used": "{{value}} used",
+      "available": "{{value}} available"
+    },
+    "tasks": {
+      "count": "{{count}} tasks",
+      "runNow": "Run now",
+      "runSucceeded": "{{task}} completed",
+      "runFailed": "Failed to run background task",
+      "interval": "Interval",
+      "seconds": "{{seconds}}s",
+      "successFailure": "Success / Failure",
+      "lastRun": "Last run"
+    },
+    "status": {
+      "online": "Online",
+      "offline": "Offline",
+      "neverrun": "Never run",
+      "running": "Running",
+      "succeeded": "Succeeded",
+      "failed": "Failed",
+      "cancelled": "Cancelled"
+    }
+  },
+  "health": {
+    "page": {
+      "eyebrow": "Operations",
+      "title": "Node and disk health",
+      "description": "Disk status, replica integrity, repair queue, and maintenance task execution."
+    },
+    "errors": {
+      "loadFailed": "Failed to load health diagnostics"
+    },
+    "metrics": {
+      "overall": "Overall",
+      "healthy": "Healthy",
+      "unhealthyDetail": "Offline resources, under-replicated objects, or failed repairs",
+      "disks": "Disks",
+      "onlineOffline": "{{online}} online / {{offline}} offline",
+      "replicas": "Replicas",
+      "missingReplicaFiles": "Missing replica files",
+      "repairQueue": "Repair queue",
+      "failedRepairs": "{{count}} failed repairs"
+    },
+    "disks": {
+      "title": "Disks and nodes",
+      "count": "{{count}} disks",
+      "loading": "Loading disks...",
+      "empty": "No disks registered",
+      "columns": {
+        "disk": "Disk",
+        "node": "Node / Pool",
+        "capacity": "Capacity",
+        "available": "Available",
+        "lastSeen": "Last seen",
+        "status": "Status"
+      }
+    },
+    "diagnostics": {
+      "title": "Diagnostics",
+      "replicaTitle": "Replica integrity",
+      "desiredReplicas": "Desired replicas",
+      "replicaRecords": "Replica records",
+      "underReplicated": "Under replicated",
+      "withoutManifest": "Without manifest",
+      "repairTitle": "Repair queue",
+      "pending": "Pending",
+      "completed": "Completed",
+      "failed": "Failed",
+      "retryable": "Retryable",
+      "ecTitle": "Erasure coding",
+      "ecProfiles": "Profiles",
+      "ecEnabled": "Enabled",
+      "ecDisabled": "Disabled"
+    },
+    "tasks": {
+      "title": "Maintenance control",
+      "count": "{{count}} tasks",
+      "runNow": "Run now",
+      "runSucceeded": "{{task}} completed",
+      "runFailed": "Failed to run background task",
+      "interval": "{{seconds}}s interval",
+      "successes": "{{count}} successes",
+      "neverRun": "Never run",
+      "historyTitle": "Recent maintenance runs",
+      "historyCount": "{{count}} runs",
+      "historyEmpty": "No maintenance task runs recorded yet",
+      "historyTask": "Task",
+      "historyStatus": "Status",
+      "historyCompleted": "Completed",
+      "historyDuration": "Duration",
+      "historyResult": "Result"
+    },
+    "status": {
+      "online": "Online",
+      "offline": "Offline",
+      "neverrun": "Never run",
+      "running": "Running",
+      "succeeded": "Succeeded",
+      "failed": "Failed",
+      "cancelled": "Cancelled"
+    }
+  }
+}

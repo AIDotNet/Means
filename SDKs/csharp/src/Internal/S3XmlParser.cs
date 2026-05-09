@@ -63,12 +63,116 @@ internal static class S3XmlParser
         return result;
     }
 
+    internal static BucketVersioningResult ParseBucketVersioning(string xml, string bucketName)
+    {
+        var document = XDocument.Parse(xml);
+        var root = document.Root ?? throw new InvalidOperationException("Versioning response did not contain a root element.");
+        return new BucketVersioningResult
+        {
+            BucketName = bucketName,
+            Status = EmptyToNull(ElementValue(root, "Status")) ?? "Off"
+        };
+    }
+
+    internal static ListObjectVersionsResult ParseObjectVersions(string xml, string fallbackBucket)
+    {
+        var document = XDocument.Parse(xml);
+        var root = document.Root ?? throw new InvalidOperationException("ListObjectVersions response did not contain a root element.");
+        var result = new ListObjectVersionsResult
+        {
+            BucketName = ElementValue(root, "Name") ?? fallbackBucket,
+            Prefix = EmptyToNull(ElementValue(root, "Prefix")),
+            Delimiter = EmptyToNull(ElementValue(root, "Delimiter")),
+            IsTruncated = string.Equals(ElementValue(root, "IsTruncated"), "true", StringComparison.OrdinalIgnoreCase),
+            NextKeyMarker = EmptyToNull(ElementValue(root, "NextKeyMarker")),
+            NextVersionIdMarker = EmptyToNull(ElementValue(root, "NextVersionIdMarker"))
+        };
+
+        foreach (var element in root.Elements().Where(element => element.Name.LocalName is "Version" or "DeleteMarker"))
+        {
+            result.Versions.Add(new ObjectVersionSummary
+            {
+                Key = ElementValue(element, "Key") ?? "",
+                VersionId = ElementValue(element, "VersionId") ?? "",
+                IsLatest = string.Equals(ElementValue(element, "IsLatest"), "true", StringComparison.OrdinalIgnoreCase),
+                IsDeleteMarker = element.Name.LocalName == "DeleteMarker",
+                ETag = NormalizeETag(ElementValue(element, "ETag")),
+                Size = ParseLong(ElementValue(element, "Size")) ?? 0,
+                LastModified = ParseDate(ElementValue(element, "LastModified"))
+            });
+        }
+
+        foreach (var element in root.Elements().Where(element => element.Name.LocalName == "CommonPrefixes"))
+        {
+            var prefix = ElementValue(element, "Prefix");
+            if (!string.IsNullOrEmpty(prefix))
+            {
+                result.CommonPrefixes.Add(prefix);
+            }
+        }
+
+        return result;
+    }
+
+    internal static BucketLifecycleConfiguration ParseBucketLifecycle(string xml)
+    {
+        var document = XDocument.Parse(xml);
+        var root = document.Root ?? throw new InvalidOperationException("Lifecycle response did not contain a root element.");
+        var configuration = new BucketLifecycleConfiguration();
+        foreach (var element in root.Elements().Where(element => element.Name.LocalName == "Rule"))
+        {
+            var filter = element.Elements().FirstOrDefault(child => child.Name.LocalName == "Filter");
+            configuration.Rules.Add(new LifecycleRule
+            {
+                Id = ElementValue(element, "ID") ?? "",
+                Status = ElementValue(element, "Status") ?? "Disabled",
+                Prefix = ElementValue(element, "Prefix")
+                    ?? filter?.Elements().FirstOrDefault(child => child.Name.LocalName == "Prefix")?.Value
+                    ?? "",
+                ExpirationDays = ParseInt(element.Elements().FirstOrDefault(child => child.Name.LocalName == "Expiration"), "Days"),
+                NoncurrentVersionExpirationDays = ParseInt(element.Elements().FirstOrDefault(child => child.Name.LocalName == "NoncurrentVersionExpiration"), "NoncurrentDays"),
+                AbortIncompleteMultipartUploadDays = ParseInt(element.Elements().FirstOrDefault(child => child.Name.LocalName == "AbortIncompleteMultipartUpload"), "DaysAfterInitiation")
+            });
+        }
+
+        return configuration;
+    }
+
+    internal static Dictionary<string, string> ParseObjectTagging(string xml)
+    {
+        var document = XDocument.Parse(xml);
+        var root = document.Root ?? throw new InvalidOperationException("Tagging response did not contain a root element.");
+        var tags = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var element in root.Descendants().Where(element => element.Name.LocalName == "Tag"))
+        {
+            var key = ElementValue(element, "Key");
+            if (!string.IsNullOrEmpty(key))
+            {
+                tags[key] = ElementValue(element, "Value") ?? "";
+            }
+        }
+
+        return tags;
+    }
+
     internal static CopyObjectResult ParseCopyObject(string xml)
     {
         var document = XDocument.Parse(xml);
         var root = document.Root ?? throw new InvalidOperationException("CopyObject response did not contain a root element.");
 
         return new CopyObjectResult
+        {
+            ETag = NormalizeETag(ElementValue(root, "ETag")),
+            LastModified = ParseDate(ElementValue(root, "LastModified"))
+        };
+    }
+
+    internal static CopyPartResult ParseCopyPart(string xml)
+    {
+        var document = XDocument.Parse(xml);
+        var root = document.Root ?? throw new InvalidOperationException("CopyPart response did not contain a root element.");
+
+        return new CopyPartResult
         {
             ETag = NormalizeETag(ElementValue(root, "ETag")),
             LastModified = ParseDate(ElementValue(root, "LastModified"))
@@ -110,7 +214,12 @@ internal static class S3XmlParser
         {
             BucketName = ElementValue(root, "Bucket") ?? "",
             Key = ElementValue(root, "Key") ?? "",
-            UploadId = ElementValue(root, "UploadId") ?? ""
+            UploadId = ElementValue(root, "UploadId") ?? "",
+            Initiated = ParseDate(ElementValue(root, "Initiated")),
+            PartNumberMarker = ParseInt(ElementValue(root, "PartNumberMarker")) ?? 0,
+            NextPartNumberMarker = ParseInt(ElementValue(root, "NextPartNumberMarker")) ?? 0,
+            MaxParts = ParseInt(ElementValue(root, "MaxParts")) ?? 0,
+            IsTruncated = string.Equals(ElementValue(root, "IsTruncated"), "true", StringComparison.OrdinalIgnoreCase)
         };
 
         foreach (var element in root.Elements().Where(element => element.Name.LocalName == "Part"))
@@ -135,6 +244,10 @@ internal static class S3XmlParser
         {
             BucketName = ElementValue(root, "Bucket") ?? "",
             Prefix = EmptyToNull(ElementValue(root, "Prefix")),
+            Delimiter = EmptyToNull(ElementValue(root, "Delimiter")),
+            KeyMarker = EmptyToNull(ElementValue(root, "KeyMarker")),
+            UploadIdMarker = EmptyToNull(ElementValue(root, "UploadIdMarker")),
+            MaxUploads = ParseInt(ElementValue(root, "MaxUploads")) ?? 0,
             IsTruncated = string.Equals(ElementValue(root, "IsTruncated"), "true", StringComparison.OrdinalIgnoreCase),
             NextKeyMarker = EmptyToNull(ElementValue(root, "NextKeyMarker")),
             NextUploadIdMarker = EmptyToNull(ElementValue(root, "NextUploadIdMarker"))
@@ -148,6 +261,15 @@ internal static class S3XmlParser
                 UploadId = ElementValue(element, "UploadId") ?? "",
                 Initiated = ParseDate(ElementValue(element, "Initiated"))
             });
+        }
+
+        foreach (var element in root.Elements().Where(element => element.Name.LocalName == "CommonPrefixes"))
+        {
+            var prefix = ElementValue(element, "Prefix");
+            if (!string.IsNullOrEmpty(prefix))
+            {
+                result.CommonPrefixes.Add(prefix);
+            }
         }
 
         return result;
@@ -199,6 +321,11 @@ internal static class S3XmlParser
         return int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var result)
             ? result
             : null;
+    }
+
+    private static int? ParseInt(XElement? root, string name)
+    {
+        return root is null ? null : ParseInt(ElementValue(root, name));
     }
 
     private static long? ParseLong(string? value)

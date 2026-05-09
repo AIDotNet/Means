@@ -46,14 +46,30 @@ All SDKs expose the same logical operations:
 - `createBucket`
 - `headBucket`
 - `deleteBucket`
+- `getBucketVersioning`
+- `putBucketVersioning`
+- `getBucketLifecycle`
+- `putBucketLifecycle`
+- `deleteBucketLifecycle`
 - `listObjects`
+- `listObjectVersions`
 - `putObject`
 - `getObject`
 - `headObject`
 - `deleteObject`
+- `getObjectTagging`
+- `putObjectTagging`
+- `deleteObjectTagging`
 - `copyObject`
+- `getBucketCors`
+- `putBucketCors`
+- `deleteBucketCors`
+- `getBucketNotification`
+- `putBucketNotification`
+- `deleteBucketNotification`
 - `initiateMultipartUpload`
 - `uploadPart`
+- `uploadPartCopy`
 - `completeMultipartUpload`
 - `abortMultipartUpload`
 - `listParts`
@@ -73,7 +89,25 @@ SDKs support client-side multipart upload with these constraints:
 - SDK high-level helpers default to `16 MiB` parts
 - final object ETag is `md5(concat(part-md5-bytes))-part-count`
 - incomplete uploads do not appear in normal object listing
-- `UploadPartCopy` is not part of v1
+- `UploadPartCopy` supports `x-amz-copy-source` and optional `x-amz-copy-source-range`
+- `ListParts` exposes `part-number-marker`, `max-parts`, truncation, and next marker fields
+- `ListMultipartUploads` exposes `delimiter`, common prefixes, upload markers, and truncation fields
+
+## Versioning and Lifecycle
+
+SDKs expose bucket versioning controls, `ListObjectVersions`, and object operations that preserve the returned `x-amz-version-id` header when present. `GET`, `HEAD`, `DELETE`, object tagging, copy source, and presigned GET support optional `versionId`.
+
+Lifecycle configuration supports these rule actions:
+
+- current object expiration by `Expiration.Days`
+- noncurrent version cleanup by `NoncurrentVersionExpiration.NoncurrentDays`
+- incomplete multipart cleanup by `AbortIncompleteMultipartUpload.DaysAfterInitiation`
+
+## Tagging, CORS, And Notification
+
+SDKs expose object tagging as a key/value map and support optional `versionId` for versioned tags.
+
+Bucket CORS and bucket notification are exposed as raw XML configuration methods in v1. The SDK validates the root element before sending, but it does not attempt to model every AWS XML variant.
 
 ## Error Model
 

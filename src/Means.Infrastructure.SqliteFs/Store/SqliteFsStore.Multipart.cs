@@ -159,6 +159,20 @@ public sealed partial class SqliteFsStore
             throw new MeansException(MeansErrorCodes.NoSuchBucket, "Bucket does not exist.", 404);
         }
 
+        var requestHash = ComputeCompleteMultipartRequestHash(request);
+        var idempotentResult = await TryReadIdempotentObjectAsync(
+            connection,
+            MetadataCommitOperationCompleteMultipart,
+            request.BucketName,
+            request.Key,
+            request.IdempotencyKey,
+            requestHash,
+            cancellationToken);
+        if (idempotentResult is not null)
+        {
+            return idempotentResult;
+        }
+
         var upload = await GetMultipartUploadAsync(connection, request.BucketName, request.Key, request.UploadId, cancellationToken)
             ?? throw NoSuchUpload();
         var storedParts = (await ReadMultipartPartsAsync(connection, request.UploadId, cancellationToken))
@@ -186,16 +200,17 @@ public sealed partial class SqliteFsStore
         Directory.CreateDirectory(Path.Combine(_options.ObjectsPath, "tmp"));
         var objectId = Guid.NewGuid().ToString("N");
         var tempPath = Path.Combine(_options.ObjectsPath, "tmp", objectId + ".multipart.tmp");
-        var finalPath = GetObjectPath(objectId);
-        Directory.CreateDirectory(Path.GetDirectoryName(finalPath)!);
 
         var length = 0L;
         string etag;
+        string checksumSha256;
         try
         {
             await using (var output = File.Create(tempPath))
             {
                 using var multipartMd5 = MD5.Create();
+                using var sha256 = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+                var buffer = new byte[1024 * 128];
                 foreach (var part in orderedParts)
                 {
                     multipartMd5.TransformBlock(HexToBytes(part.ETag), 0, 16, null, 0);
@@ -206,12 +221,19 @@ public sealed partial class SqliteFsStore
                     }
 
                     await using var input = File.OpenRead(partPath);
-                    await input.CopyToAsync(output, cancellationToken);
+                    int read;
+                    while ((read = await input.ReadAsync(buffer, cancellationToken)) > 0)
+                    {
+                        await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                        sha256.AppendData(buffer.AsSpan(0, read));
+                    }
+
                     length += part.Size;
                 }
 
                 multipartMd5.TransformFinalBlock([], 0, 0);
                 etag = Convert.ToHexString(multipartMd5.Hash ?? []).ToLowerInvariant() + "-" + orderedParts.Count;
+                checksumSha256 = Convert.ToHexString(sha256.GetHashAndReset()).ToLowerInvariant();
             }
         }
         catch
@@ -220,44 +242,115 @@ public sealed partial class SqliteFsStore
             throw;
         }
 
-        File.Move(tempPath, finalPath, overwrite: false);
+        IReadOnlyList<ObjectReplicaRecord> replicas;
+        try
+        {
+            replicas = await WriteObjectReplicasAsync(request.BucketName, request.Key, objectId, length, tempPath, checksumSha256, cancellationToken);
+        }
+        catch
+        {
+            DeleteFileQuietly(tempPath);
+            throw;
+        }
+
+        ObjectEcWriteSet? ecWriteSet = null;
+        try
+        {
+            ecWriteSet = await WriteObjectErasureCodingAsync(connection, request.BucketName, request.Key, objectId, length, tempPath, cancellationToken);
+        }
+        catch
+        {
+            DeleteReplicaFilesQuietly(replicas);
+            DeleteFileQuietly(tempPath);
+            throw;
+        }
+
         string? previousObjectId = null;
+        IReadOnlyList<string> previousReplicaPaths = Array.Empty<string>();
+        IReadOnlyList<string> previousEcShardPaths = Array.Empty<string>();
+        var preservePreviousVersion = await IsBucketVersioningEnabledAsync(connection, request.BucketName, cancellationToken);
         var obsoletePartIds = storedParts.Values.Select(part => part.PartId).ToArray();
-        var info = new ObjectInfo(
-            upload.BucketName,
-            upload.Key,
-            objectId,
-            etag,
-            length,
-            upload.ContentType,
-            DateTimeOffset.UtcNow,
-            upload.Metadata,
-            upload.CacheControl,
-            upload.ContentDisposition);
+        ObjectInfo info;
 
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         try
         {
+            var commitAt = await NextMetadataTimestampAsync(connection, (SqliteTransaction)transaction, cancellationToken);
+            info = new ObjectInfo(
+                upload.BucketName,
+                upload.Key,
+                objectId,
+                etag,
+                length,
+                upload.ContentType,
+                commitAt,
+                upload.Metadata,
+                upload.CacheControl,
+                upload.ContentDisposition);
+            var commitId = Guid.NewGuid().ToString("N");
+            await InsertMetadataCommitAsync(
+                connection,
+                (SqliteTransaction)transaction,
+                commitId,
+                MetadataCommitOperationCompleteMultipart,
+                request.BucketName,
+                request.Key,
+                objectId,
+                commitAt,
+                cancellationToken);
+
             previousObjectId = await GetObjectIdAsync(connection, request.BucketName, request.Key, cancellationToken);
+            if (!preservePreviousVersion && !string.IsNullOrEmpty(previousObjectId) && previousObjectId != objectId)
+            {
+                previousReplicaPaths = await GetObjectReplicaPathsAsync(connection, previousObjectId, cancellationToken);
+                previousEcShardPaths = await GetObjectEcShardPathsAsync(connection, previousObjectId, cancellationToken);
+                await DeleteObjectReplicaRowsAsync(connection, (SqliteTransaction)transaction, previousObjectId, cancellationToken);
+                await DeleteReplicaRepairRowsAsync(connection, (SqliteTransaction)transaction, previousObjectId, cancellationToken);
+                await DeleteObjectErasureCodingRowsAsync(connection, (SqliteTransaction)transaction, previousObjectId, cancellationToken);
+            }
+
             await UpsertObjectAsync(connection, (SqliteTransaction)transaction, info, cancellationToken);
+            await ReplaceObjectReplicasAsync(connection, (SqliteTransaction)transaction, objectId, replicas, cancellationToken);
+            await ReplaceObjectErasureCodingAsync(connection, (SqliteTransaction)transaction, ecWriteSet, cancellationToken);
+            await InsertObjectVersionAsync(connection, (SqliteTransaction)transaction, info, isDeleteMarker: false, commitAt, cancellationToken);
+            await InsertIdempotencyRecordAsync(
+                connection,
+                (SqliteTransaction)transaction,
+                MetadataCommitOperationCompleteMultipart,
+                request.BucketName,
+                request.Key,
+                request.IdempotencyKey,
+                requestHash,
+                objectId,
+                commitAt,
+                cancellationToken);
             await DeleteMultipartUploadRowsAsync(connection, (SqliteTransaction)transaction, request.UploadId, cancellationToken);
+            await CommitMetadataCommitAsync(connection, (SqliteTransaction)transaction, commitId, commitAt, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
         }
         catch
         {
             await transaction.RollbackAsync(cancellationToken);
-            DeleteFileQuietly(finalPath);
+            DeleteReplicaFilesQuietly(replicas);
+            if (ecWriteSet is not null)
+            {
+                DeleteEcShardFilesQuietly(ecWriteSet.Shards);
+            }
+
+            DeleteFileQuietly(tempPath);
             throw;
         }
 
+        DeleteFileQuietly(tempPath);
         foreach (var partId in obsoletePartIds)
         {
             DeleteFileQuietly(GetMultipartPartPath(partId));
         }
 
-        if (!string.IsNullOrEmpty(previousObjectId) && previousObjectId != objectId)
+        if (!preservePreviousVersion && !string.IsNullOrEmpty(previousObjectId) && previousObjectId != objectId)
         {
-            DeleteFileQuietly(GetObjectPath(previousObjectId));
+            DeleteObjectFilesQuietly(previousObjectId, previousReplicaPaths);
+            DeleteEcShardFilesQuietly(previousEcShardPaths);
         }
 
         return info;
@@ -287,7 +380,7 @@ public sealed partial class SqliteFsStore
         }
     }
 
-    public async Task<ListPartsResult> ListPartsAsync(string bucketName, string key, string uploadId, CancellationToken cancellationToken)
+    public async Task<ListPartsResult> ListPartsAsync(string bucketName, string key, string uploadId, int partNumberMarker, int maxParts, CancellationToken cancellationToken)
     {
         await EnsureInitializedAsync(cancellationToken);
         await using var connection = CreateConnection();
@@ -299,8 +392,12 @@ public sealed partial class SqliteFsStore
 
         var upload = await GetMultipartUploadAsync(connection, bucketName, key, uploadId, cancellationToken)
             ?? throw NoSuchUpload();
-        var parts = await ReadMultipartPartsAsync(connection, upload.UploadId, cancellationToken);
-        return new ListPartsResult(upload.BucketName, upload.Key, upload.UploadId, upload.InitiatedAt, parts);
+        var effectiveMaxParts = maxParts <= 0 ? 1000 : Math.Min(maxParts, 1000);
+        var parts = await ReadMultipartPartsAsync(connection, upload.UploadId, Math.Max(0, partNumberMarker), effectiveMaxParts + 1, cancellationToken);
+        var isTruncated = parts.Count > effectiveMaxParts;
+        var visibleParts = parts.Take(effectiveMaxParts).ToArray();
+        var nextMarker = isTruncated && visibleParts.Length > 0 ? visibleParts[^1].PartNumber : 0;
+        return new ListPartsResult(upload.BucketName, upload.Key, upload.UploadId, upload.InitiatedAt, partNumberMarker, nextMarker, effectiveMaxParts, isTruncated, visibleParts);
     }
 
     public async Task<ListMultipartUploadsResult> ListMultipartUploadsAsync(string bucketName, ListMultipartUploadsOptions options, CancellationToken cancellationToken)
@@ -314,13 +411,16 @@ public sealed partial class SqliteFsStore
         }
 
         var prefix = options.Prefix ?? "";
+        var prefixEnd = PrefixUpperBound(prefix);
+        var delimiter = options.Delimiter ?? "";
         var maxUploads = options.MaxUploads <= 0 ? 1000 : Math.Min(options.MaxUploads, 1000);
         await using var command = connection.CreateCommand();
         command.CommandText = """
             select key, upload_id, initiated_utc
             from multipart_uploads
             where bucket_name = $bucket
-              and key like $prefix
+              and key >= $prefix
+              and ($prefixEnd is null or key < $prefixEnd)
               and (
                   $keyMarker is null
                   or key > $keyMarker
@@ -330,13 +430,15 @@ public sealed partial class SqliteFsStore
             limit $limit;
             """;
         command.Parameters.AddWithValue("$bucket", bucketName);
-        command.Parameters.AddWithValue("$prefix", prefix + "%");
+        command.Parameters.AddWithValue("$prefix", prefix);
+        command.Parameters.AddWithValue("$prefixEnd", (object?)prefixEnd ?? DBNull.Value);
         command.Parameters.AddWithValue("$keyMarker", (object?)options.KeyMarker ?? DBNull.Value);
         command.Parameters.AddWithValue("$uploadIdMarker", (object?)options.UploadIdMarker ?? DBNull.Value);
         command.Parameters.AddWithValue("$limit", maxUploads + 1);
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var uploads = new List<MultipartUploadSummary>();
+        var prefixes = new SortedSet<string>(StringComparer.Ordinal);
         string? nextKeyMarker = null;
         string? nextUploadIdMarker = null;
         var scanned = 0;
@@ -352,6 +454,17 @@ public sealed partial class SqliteFsStore
                 break;
             }
 
+            if (!string.IsNullOrEmpty(delimiter))
+            {
+                var rest = key[prefix.Length..];
+                var delimiterIndex = rest.IndexOf(delimiter, StringComparison.Ordinal);
+                if (delimiterIndex >= 0)
+                {
+                    prefixes.Add(prefix + rest[..(delimiterIndex + delimiter.Length)]);
+                    continue;
+                }
+            }
+
             uploads.Add(new MultipartUploadSummary(
                 key,
                 uploadId,
@@ -362,13 +475,15 @@ public sealed partial class SqliteFsStore
         return new ListMultipartUploadsResult(
             bucketName,
             options.Prefix,
+            options.Delimiter,
             options.KeyMarker,
             options.UploadIdMarker,
             maxUploads,
             isTruncated,
             isTruncated ? nextKeyMarker : null,
             isTruncated ? nextUploadIdMarker : null,
-            uploads);
+            uploads,
+            prefixes.ToArray());
     }
 
     public async Task<int> CleanupMultipartUploadsAsync(DateTimeOffset olderThanUtc, CancellationToken cancellationToken)
@@ -479,15 +594,24 @@ public sealed partial class SqliteFsStore
 
     private async Task<IReadOnlyList<MultipartPartInfo>> ReadMultipartPartsAsync(SqliteConnection connection, string uploadId, CancellationToken cancellationToken)
     {
+        return await ReadMultipartPartsAsync(connection, uploadId, partNumberMarker: 0, limit: int.MaxValue, cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<MultipartPartInfo>> ReadMultipartPartsAsync(SqliteConnection connection, string uploadId, int partNumberMarker, int limit, CancellationToken cancellationToken)
+    {
         await using var command = connection.CreateCommand();
         command.CommandText = """
             select u.bucket_name, u.key, p.part_number, p.part_id, p.etag, p.content_length, p.last_modified_utc
             from multipart_parts p
             join multipart_uploads u on u.upload_id = p.upload_id
             where p.upload_id = $uploadId
-            order by p.part_number;
+              and p.part_number > $partNumberMarker
+            order by p.part_number
+            limit $limit;
             """;
         command.Parameters.AddWithValue("$uploadId", uploadId);
+        command.Parameters.AddWithValue("$partNumberMarker", partNumberMarker);
+        command.Parameters.AddWithValue("$limit", limit);
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var parts = new List<MultipartPartInfo>();

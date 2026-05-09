@@ -1,0 +1,18 @@
+﻿<LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Rule>
+    <ID>expire-logs</ID>
+    <Status>Enabled</Status>
+    <Filter>
+      <Prefix>logs/</Prefix>
+    </Filter>
+    <Expiration>
+      <Days>30</Days>
+    </Expiration>
+    <NoncurrentVersionExpiration>
+      <NoncurrentDays>7</NoncurrentDays>
+    </NoncurrentVersionExpiration>
+    <AbortIncompleteMultipartUpload>
+      <DaysAfterInitiation>1</DaysAfterInitiation>
+    </AbortIncompleteMultipartUpload>
+  </Rule>
+</LifecycleConfiguration>

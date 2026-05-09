@@ -63,9 +63,31 @@ internal static class S3ResponseWriter
         bool headOnly,
         CancellationToken cancellationToken)
     {
-        await using var data = await store.GetObjectAsync(bucketName, key, cancellationToken);
+        await WriteObjectAsync(context, store, bucketName, key, versionId: null, bucketSettings, headOnly, cancellationToken);
+    }
+
+    public static async Task WriteObjectAsync(
+        HttpContext context,
+        IObjectStore store,
+        string bucketName,
+        string key,
+        string? versionId,
+        BucketSettings bucketSettings,
+        bool headOnly,
+        CancellationToken cancellationToken)
+    {
+        await using var data = await store.GetObjectAsync(bucketName, key, versionId, cancellationToken);
         var info = data.Info;
         WriteObjectHeaders(context, info, bucketSettings);
+        if (!string.IsNullOrWhiteSpace(versionId))
+        {
+            context.Response.Headers["x-amz-version-id"] = info.ObjectId;
+        }
+
+        if (TryWriteConditionalResponse(context, info, headOnly))
+        {
+            return;
+        }
 
         var rangeHeader = context.Request.Headers.Range.ToString();
         if (!string.IsNullOrWhiteSpace(rangeHeader))
@@ -86,24 +108,25 @@ internal static class S3ResponseWriter
         if (!headOnly)
         {
             context.Items[S3MetricsItems.EgressBytes] = info.ContentLength;
+            if (!string.IsNullOrWhiteSpace(data.ContentPath))
+            {
+                await context.Response.SendFileAsync(data.ContentPath, 0, info.ContentLength, cancellationToken);
+                return;
+            }
+
             await data.Content.CopyToAsync(context.Response.Body, cancellationToken);
         }
     }
 
     private static async Task WriteCompressedAsync(HttpContext context, Stream input, string sourceEtag, string encoding, bool headOnly, CancellationToken cancellationToken)
     {
-        await using var compressed = new MemoryStream();
-        await CompressAsync(input, compressed, encoding, cancellationToken);
         context.Response.StatusCode = StatusCodes.Status200OK;
         context.Response.Headers.ContentEncoding = encoding;
         context.Response.Headers.Vary = "Accept-Encoding";
         context.Response.Headers.ETag = $"W/\"{sourceEtag}-{encoding}\"";
-        context.Response.ContentLength = compressed.Length;
         if (!headOnly)
         {
-            context.Items[S3MetricsItems.EgressBytes] = compressed.Length;
-            compressed.Position = 0;
-            await compressed.CopyToAsync(context.Response.Body, cancellationToken);
+            await CompressAsync(input, context.Response.Body, encoding, cancellationToken);
         }
     }
 
@@ -130,6 +153,12 @@ internal static class S3ResponseWriter
         }
 
         context.Items[S3MetricsItems.EgressBytes] = length;
+        if (content is FileStream fileStream)
+        {
+            await context.Response.SendFileAsync(fileStream.Name, start, length, cancellationToken);
+            return;
+        }
+
         content.Seek(start, SeekOrigin.Begin);
         var buffer = new byte[1024 * 64];
         var remaining = length;
@@ -190,6 +219,36 @@ internal static class S3ResponseWriter
         {
             context.Response.Headers["x-amz-meta-" + item.Key] = item.Value;
         }
+    }
+
+    private static bool TryWriteConditionalResponse(HttpContext context, ObjectInfo info, bool headOnly)
+    {
+        var ifMatch = context.Request.Headers.IfMatch.ToString();
+        if (!string.IsNullOrWhiteSpace(ifMatch) && !EtagConditionMatches(ifMatch, info.ETag))
+        {
+            throw new MeansException(MeansErrorCodes.PreconditionFailed, "At least one precondition failed.", StatusCodes.Status412PreconditionFailed);
+        }
+
+        var ifNoneMatch = context.Request.Headers.IfNoneMatch.ToString();
+        if (!string.IsNullOrWhiteSpace(ifNoneMatch) && EtagConditionMatches(ifNoneMatch, info.ETag))
+        {
+            context.Response.StatusCode = StatusCodes.Status304NotModified;
+            context.Response.ContentLength = 0;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool EtagConditionMatches(string condition, string etag)
+    {
+        if (condition.Trim() == "*")
+        {
+            return true;
+        }
+
+        return condition.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Any(candidate => string.Equals(candidate.Trim().Trim('"'), etag.Trim('"'), StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool TryGetDefaultHeader(BucketSettings settings, string headerName, out string value)

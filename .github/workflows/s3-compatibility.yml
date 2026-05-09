@@ -1,0 +1,34 @@
+﻿name: S3 compatibility matrix
+
+on:
+  workflow_dispatch:
+
+jobs:
+  aws-cli-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install AWS CLI
+        run: sudo apt-get update && sudo apt-get install -y awscli
+      - name: Build server
+        run: dotnet build Means.slnx
+      - name: Start Means
+        run: |
+          export ASPNETCORE_ENVIRONMENT=Development
+          dotnet run --project src/Means/Means.csproj --urls http://127.0.0.1:5000 > means.log 2>&1 &
+          echo $! > means.pid
+          for i in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:5000/metrics && exit 0
+            sleep 1
+          done
+          cat means.log
+          exit 1
+      - name: AWS CLI smoke
+        shell: pwsh
+        run: ./scripts/compatibility/run-s3-client-matrix.ps1 -Endpoint http://127.0.0.1:5000/s3
