@@ -1,7 +1,7 @@
 {
   "name": "means-typescript-sdks",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TypeScript SDK workspace for Means object storage.",
   "license": "MIT",
   "workspaces": [
@@ -16,4 +16,3 @@
     "typescript": "^5.8.3"
   }
 }
-

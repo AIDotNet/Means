@@ -1,6 +1,6 @@
 {
   "name": "@means/sdk-node",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Node.js TypeScript SDK extension for Means object storage with SigV4 signing.",
   "license": "MIT",
   "type": "commonjs",
@@ -24,11 +24,10 @@
     "access": "public"
   },
   "dependencies": {
-    "@means/sdk": "0.1.0"
+    "@means/sdk": "0.1.1"
   },
   "scripts": {
     "build": "node ../../scripts/build-package.mjs .",
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\""
   }
 }
-

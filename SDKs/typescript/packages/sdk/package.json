@@ -1,6 +1,6 @@
 {
   "name": "@means/sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Browser-safe shared TypeScript SDK for Means object storage.",
   "license": "MIT",
   "type": "commonjs",
@@ -28,4 +28,3 @@
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\""
   }
 }
-
