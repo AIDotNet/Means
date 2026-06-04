@@ -1,11 +1,13 @@
 ﻿using System.Buffers.Binary;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using Means.Core;
 
 namespace Means.Infrastructure.XlFs;
 
-public sealed class MeansLogDb : IAsyncDisposable
+public sealed partial class MeansLogDb : IAsyncDisposable
 {
     private const uint Magic = 0x4d4c4442; // MLDB
     private const uint BinaryMagic = 0x4d4c4432; // MLD2
@@ -62,12 +64,12 @@ public sealed class MeansLogDb : IAsyncDisposable
             _items.TryGetValue(key, out bytes);
         }
 
-        return Task.FromResult(bytes is null ? default : JsonSerializer.Deserialize<T>(bytes));
+        return Task.FromResult(bytes is null ? default : JsonSerializer.Deserialize(bytes, XlJson.TypeInfo<T>()));
     }
 
     public async Task PutJsonAsync<T>(string key, T value, CancellationToken cancellationToken)
     {
-        await PutBatchAsync([new LogDbMutation(key, JsonSerializer.SerializeToUtf8Bytes(value), false)], cancellationToken);
+        await PutBatchAsync([new LogDbMutation(key, JsonSerializer.SerializeToUtf8Bytes(value, XlJson.TypeInfo<T>()), false)], cancellationToken);
     }
 
     public async Task PutBatchAsync(IReadOnlyList<LogDbMutation> mutations, CancellationToken cancellationToken)
@@ -166,7 +168,7 @@ public sealed class MeansLogDb : IAsyncDisposable
                         .ToList();
                 }
 
-                await JsonSerializer.SerializeAsync(output, records, cancellationToken: cancellationToken);
+                await JsonSerializer.SerializeAsync(output, records, LogDbJsonTypeInfo<List<LogDbRecord>>(), cancellationToken);
             }
 
             File.Move(temp, snapshotPath, overwrite: true);
@@ -185,7 +187,7 @@ public sealed class MeansLogDb : IAsyncDisposable
         try
         {
             await using var input = new FileStream(snapshotPath, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, FileOptions.Asynchronous);
-            var records = await JsonSerializer.DeserializeAsync<List<LogDbRecord>>(input, cancellationToken: cancellationToken) ?? [];
+            var records = await JsonSerializer.DeserializeAsync(input, LogDbJsonTypeInfo<List<LogDbRecord>>(), cancellationToken) ?? [];
             lock (_items)
             {
                 _items.Clear();
@@ -257,7 +259,7 @@ public sealed class MeansLogDb : IAsyncDisposable
             {
                 mutations = magic == BinaryMagic
                     ? DecodeMutations(payload)
-                    : (JsonSerializer.Deserialize<LogDbRecord[]>(payload) ?? [])
+                    : (JsonSerializer.Deserialize(payload, LogDbJsonTypeInfo<LogDbRecord[]>()) ?? [])
                         .Select(record => new LogDbMutation(
                             record.Key,
                             record.Value is null ? null : Convert.FromBase64String(record.Value),
@@ -423,8 +425,17 @@ public sealed class MeansLogDb : IAsyncDisposable
         return value;
     }
 
+    private static JsonTypeInfo<T> LogDbJsonTypeInfo<T>()
+    {
+        return LogDbJsonContext.Default.GetTypeInfo(typeof(T)) as JsonTypeInfo<T>
+            ?? throw new InvalidOperationException($"JSON metadata for {typeof(T).FullName} is not registered.");
+    }
+
     private sealed record LogDbRecord(string Key, bool Delete, string? Value);
+
+    [JsonSerializable(typeof(List<LogDbRecord>))]
+    [JsonSerializable(typeof(LogDbRecord[]))]
+    private sealed partial class LogDbJsonContext : JsonSerializerContext;
 }
 
 public sealed record LogDbMutation(string Key, byte[]? Value, bool Delete);
-

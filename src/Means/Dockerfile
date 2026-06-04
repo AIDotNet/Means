@@ -5,7 +5,7 @@ RUN npm ci --include=dev
 COPY web/ ./
 RUN ./node_modules/.bin/tsc -b && ./node_modules/.bin/vite build --outDir /tmp/web-dist
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS base
+FROM mcr.microsoft.com/dotnet/runtime-deps:10.0 AS base
 USER $APP_UID
 WORKDIR /app
 EXPOSE 8080
@@ -14,6 +14,9 @@ EXPOSE 8081
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 ARG BUILD_CONFIGURATION=Release
 WORKDIR /src
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends clang zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
 COPY ["src/Means.Core/Means.Core.csproj", "src/Means.Core/"]
 COPY ["src/Means.Infrastructure.SqliteFs/Means.Infrastructure.SqliteFs.csproj", "src/Means.Infrastructure.SqliteFs/"]
 COPY ["src/Means.Infrastructure.XlFs/Means.Infrastructure.XlFs.csproj", "src/Means.Infrastructure.XlFs/"]
@@ -26,11 +29,11 @@ RUN dotnet build "./Means.csproj" -c $BUILD_CONFIGURATION -o /app/build
 
 FROM build AS publish
 ARG BUILD_CONFIGURATION=Release
-RUN dotnet publish "./Means.csproj" -c $BUILD_CONFIGURATION -o /app/publish /p:UseAppHost=false
+RUN dotnet publish "./Means.csproj" -c $BUILD_CONFIGURATION -o /app/publish /p:PublishAot=true
 RUN rm -rf /app/publish/wwwroot
 COPY --from=frontend /tmp/web-dist/ /app/publish/wwwroot/
 
 FROM base AS final
 WORKDIR /app
 COPY --from=publish /app/publish .
-ENTRYPOINT ["dotnet", "Means.dll"]
+ENTRYPOINT ["./Means"]

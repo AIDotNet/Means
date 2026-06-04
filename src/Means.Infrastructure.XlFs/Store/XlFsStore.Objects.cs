@@ -478,7 +478,7 @@ public sealed partial class XlFsStore
                     continue;
                 }
 
-                var manifest = JsonSerializer.Deserialize<XlObjectManifest>(File.ReadAllText(manifestPath));
+                var manifest = JsonSerializer.Deserialize(File.ReadAllText(manifestPath), XlJsonContext.Default.XlObjectManifest);
                 foreach (var shard in manifest?.Parts.SelectMany(part => part.Shards) ?? [])
                 {
                     var shardDisk = _disks.FirstOrDefault(item => item.DiskId == shard.DiskId);

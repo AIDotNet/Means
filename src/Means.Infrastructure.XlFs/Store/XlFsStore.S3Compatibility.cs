@@ -249,14 +249,14 @@ public sealed partial class XlFsStore
                 continue;
             }
 
-            var manifest = JsonSerializer.Deserialize<XlObjectManifest>(await File.ReadAllTextAsync(path, cancellationToken));
+            var manifest = JsonSerializer.Deserialize(await File.ReadAllTextAsync(path, cancellationToken), XlJsonContext.Default.XlObjectManifest);
             if (manifest is null)
             {
                 continue;
             }
 
             var updated = manifest with { Tags = tags };
-            await File.WriteAllTextAsync(path, JsonSerializer.Serialize(updated), cancellationToken);
+            await File.WriteAllTextAsync(path, JsonSerializer.Serialize(updated, XlJsonContext.Default.XlObjectManifest), cancellationToken);
         }
     }
 }

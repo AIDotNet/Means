@@ -3,10 +3,15 @@ using Means.Endpoints.Console;
 using Means.Endpoints.Metrics;
 using Means.Endpoints.S3;
 using Means.Middleware;
+using Means.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddOpenApi();
+builder.Services.ConfigureHttpJsonOptions(options =>
+{
+    options.SerializerOptions.TypeInfoResolverChain.Insert(0, MeansJsonContext.Default);
+});
 builder.Services.AddMeansDataPlane(builder.Configuration, builder.Environment);
 
 var app = builder.Build();

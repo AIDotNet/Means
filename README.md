@@ -1,6 +1,6 @@
 # Means
 
-Means 是一个可自部署的 S3-compatible 对象存储服务，当前默认运行时使用 MinIO-inspired `XlFs` 自研存储后端（单节点多盘、对象 manifest、quorum、LogDb 元数据索引），并保留 SQLite + filesystem 作为 legacy/test adapter。
+Means 是一个基于 .NET 的企业级应用框架，一个可自部署的 S3-compatible 对象存储服务，当前默认运行时使用 MinIO-inspired `XlFs` 自研存储后端（单节点多盘、对象 manifest、quorum、LogDb 元数据索引），并保留 SQLite + filesystem 作为 legacy/test adapter。
 
 > 截至 2026-05-09：本文档描述的是仓库当前代码状态，而不是仅设计目标。
 

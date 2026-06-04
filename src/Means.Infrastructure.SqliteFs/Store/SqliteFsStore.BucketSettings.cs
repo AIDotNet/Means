@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Means.Core;
 using Microsoft.Data.Sqlite;
 
@@ -6,8 +7,6 @@ namespace Means.Infrastructure.SqliteFs;
 
 public sealed partial class SqliteFsStore
 {
-    private static readonly JsonSerializerOptions BucketSettingsJsonOptions = new(JsonSerializerDefaults.Web);
-
     public async Task<BucketSettings> GetBucketSettingsAsync(string bucketName, CancellationToken cancellationToken)
     {
         await EnsureInitializedAsync(cancellationToken);
@@ -41,8 +40,8 @@ public sealed partial class SqliteFsStore
                 updated_utc = excluded.updated_utc;
             """;
         command.Parameters.AddWithValue("$bucket", settings.BucketName);
-        command.Parameters.AddWithValue("$headers", JsonSerializer.Serialize(settings.DefaultResponseHeaders, BucketSettingsJsonOptions));
-        command.Parameters.AddWithValue("$metadata", JsonSerializer.Serialize(settings.DefaultMetadata, BucketSettingsJsonOptions));
+        command.Parameters.AddWithValue("$headers", SerializeDictionary(settings.DefaultResponseHeaders));
+        command.Parameters.AddWithValue("$metadata", SerializeDictionary(settings.DefaultMetadata));
         command.Parameters.AddWithValue("$updated", (settings.UpdatedAt ?? DateTimeOffset.UtcNow).ToUniversalTime().ToString("O"));
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
@@ -78,8 +77,16 @@ public sealed partial class SqliteFsStore
 
     private static IReadOnlyDictionary<string, string> DeserializeDictionary(string json)
     {
-        var dictionary = JsonSerializer.Deserialize<Dictionary<string, string>>(json, BucketSettingsJsonOptions)
+        var dictionary = JsonSerializer.Deserialize(json, SqliteFsJsonContext.Default.DictionaryStringString)
             ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         return new Dictionary<string, string>(dictionary, StringComparer.OrdinalIgnoreCase);
     }
+
+    private static string SerializeDictionary(IReadOnlyDictionary<string, string> value)
+    {
+        return JsonSerializer.Serialize(new Dictionary<string, string>(value), SqliteFsJsonContext.Default.DictionaryStringString);
+    }
 }
+
+[JsonSerializable(typeof(Dictionary<string, string>))]
+internal sealed partial class SqliteFsJsonContext : JsonSerializerContext;

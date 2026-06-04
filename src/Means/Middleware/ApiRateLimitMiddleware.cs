@@ -4,6 +4,7 @@ using Means.Core;
 using Means.Endpoints.Console;
 using Means.Endpoints.S3;
 using Means.Protocol.S3;
+using Means.Serialization;
 using Means.Services;
 using Microsoft.Extensions.Options;
 
@@ -95,11 +96,14 @@ public static class ApiRateLimitMiddleware
         }
 
         context.Response.StatusCode = StatusCodes.Status429TooManyRequests;
-        await context.Response.WriteAsJsonAsync(
+        context.Response.ContentType = "application/json; charset=utf-8";
+        await System.Text.Json.JsonSerializer.SerializeAsync(
+            context.Response.Body,
             new ConsoleApiError(
                 MeansErrorCodes.SlowDown,
                 "Rate limit exceeded. Please reduce your request rate.",
                 StatusCodes.Status429TooManyRequests),
+            MeansJsonContext.Default.ConsoleApiError,
             cancellationToken);
     }
 

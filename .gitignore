@@ -6,4 +6,5 @@ riderModule.iml
 .idea/
 node_modules/
 dist/
-/src/Means/wwwroot
+/src/Means/wwwroot/*
+!/src/Means/wwwroot/index.html

@@ -541,8 +541,9 @@ public sealed partial class XlFsStore
 
             try
             {
-                return System.Text.Json.JsonSerializer.Deserialize<XlObjectManifest>(
-                    await File.ReadAllTextAsync(path, cancellationToken));
+                return System.Text.Json.JsonSerializer.Deserialize(
+                    await File.ReadAllTextAsync(path, cancellationToken),
+                    XlJsonContext.Default.XlObjectManifest);
             }
             catch
             {
@@ -610,7 +611,7 @@ public sealed partial class XlFsStore
         }
 
         var updatedManifest = manifest with { Parts = updatedParts };
-        var json = System.Text.Json.JsonSerializer.Serialize(updatedManifest);
+        var json = System.Text.Json.JsonSerializer.Serialize(updatedManifest, XlJsonContext.Default.XlObjectManifest);
         foreach (var shard in updatedParts.SelectMany(part => part.Shards).GroupBy(shard => shard.DiskId, StringComparer.Ordinal).Select(group => group.First()))
         {
             var disk = _disks.FirstOrDefault(item => item.DiskId == shard.DiskId);

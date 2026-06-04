@@ -1,4 +1,6 @@
 ﻿using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
+using Means.Core;
 
 namespace Means.Infrastructure.XlFs;
 
@@ -115,5 +117,24 @@ public sealed record XlRequestMetricAggregate(
 [JsonSerializable(typeof(XlMultipartPartRecord))]
 [JsonSerializable(typeof(XlAccessKeyRecord))]
 [JsonSerializable(typeof(XlRequestMetricAggregate))]
+[JsonSerializable(typeof(AuditEntry))]
+[JsonSerializable(typeof(BucketCorsConfiguration))]
+[JsonSerializable(typeof(BucketLifecycleConfiguration))]
+[JsonSerializable(typeof(BucketNotificationConfiguration))]
+[JsonSerializable(typeof(BucketSettings))]
+[JsonSerializable(typeof(ClusterNodeInfo))]
+[JsonSerializable(typeof(ErasureCodingProfile))]
+[JsonSerializable(typeof(StorageClusterInfo))]
+[JsonSerializable(typeof(SystemSettings))]
 [JsonSerializable(typeof(Dictionary<string, string>))]
+[JsonSerializable(typeof(string))]
 internal sealed partial class XlJsonContext : JsonSerializerContext;
+
+internal static class XlJson
+{
+    public static JsonTypeInfo<T> TypeInfo<T>()
+    {
+        return XlJsonContext.Default.GetTypeInfo(typeof(T)) as JsonTypeInfo<T>
+            ?? throw new InvalidOperationException($"JSON metadata for {typeof(T).FullName} is not registered.");
+    }
+}

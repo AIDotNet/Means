@@ -5,6 +5,10 @@
         <Nullable>enable</Nullable>
         <ImplicitUsings>enable</ImplicitUsings>
         <DockerDefaultTargetOS>Linux</DockerDefaultTargetOS>
+        <PublishAot>true</PublishAot>
+        <EnableRequestDelegateGenerator>true</EnableRequestDelegateGenerator>
+        <EnableConfigurationBindingGenerator>true</EnableConfigurationBindingGenerator>
+        <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
     </PropertyGroup>
 
     <ItemGroup>

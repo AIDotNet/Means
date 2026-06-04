@@ -109,7 +109,7 @@ public sealed partial class XlFsStore : IObjectStore,
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         if (File.Exists(path))
         {
-            var existing = JsonSerializer.Deserialize<XlDiskFormat>(await File.ReadAllTextAsync(path, cancellationToken))
+            var existing = JsonSerializer.Deserialize(await File.ReadAllTextAsync(path, cancellationToken), XlJsonContext.Default.XlDiskFormat)
                 ?? throw new InvalidOperationException("Invalid XlFs disk format.");
             if (existing.FormatVersion != FormatVersion ||
                 !string.Equals(existing.DeploymentId, deploymentId, StringComparison.Ordinal))
@@ -127,7 +127,7 @@ public sealed partial class XlFsStore : IObjectStore,
             _options.SetId,
             setIndex,
             DateTimeOffset.UtcNow);
-        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(created), cancellationToken);
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(created, XlJsonContext.Default.XlDiskFormat), cancellationToken);
         return created;
     }
 
@@ -165,7 +165,7 @@ public sealed partial class XlFsStore : IObjectStore,
             var path = Path.Combine(disk.RootPath, ObjectManifestRelativePath(info.BucketName, info.ObjectId));
             if (File.Exists(path))
             {
-                return JsonSerializer.Deserialize<XlObjectManifest>(await File.ReadAllTextAsync(path, cancellationToken))
+                return JsonSerializer.Deserialize(await File.ReadAllTextAsync(path, cancellationToken), XlJsonContext.Default.XlObjectManifest)
                     ?? throw new MeansException(MeansErrorCodes.NoSuchKey, "Object manifest is invalid.", 404);
             }
         }
@@ -274,11 +274,12 @@ public sealed partial class XlFsStore : IObjectStore,
 
     private static string NormalizeEtag(string etag) => etag.Trim().Trim('"').ToLowerInvariant();
 
-    private static byte[] Serialize<T>(T value) => JsonSerializer.SerializeToUtf8Bytes(value);
+    private static byte[] Serialize<T>(T value) => JsonSerializer.SerializeToUtf8Bytes(value, XlJson.TypeInfo<T>());
 
     private static T Deserialize<T>(byte[] value)
     {
-        return JsonSerializer.Deserialize<T>(value) ?? throw new InvalidOperationException("Stored XlFs metadata is invalid.");
+        return JsonSerializer.Deserialize(value, XlJson.TypeInfo<T>())
+            ?? throw new InvalidOperationException("Stored XlFs metadata is invalid.");
     }
 
     private static string ResolvePath(string path)

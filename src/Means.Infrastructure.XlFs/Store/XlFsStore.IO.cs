@@ -66,7 +66,7 @@ public sealed partial class XlFsStore
         IReadOnlyList<XlShardManifest> shards,
         CancellationToken cancellationToken)
     {
-        var json = JsonSerializer.Serialize(manifest);
+        var json = JsonSerializer.Serialize(manifest, XlJsonContext.Default.XlObjectManifest);
         var manifestTargets = shards
             .GroupBy(shard => shard.DiskId, StringComparer.Ordinal)
             .Select(group => group.OrderBy(shard => shard.SetIndex).First())

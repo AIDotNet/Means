@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Means.Core;
+using Means.Serialization;
 
 namespace Means.Endpoints.Console;
 
@@ -37,7 +38,11 @@ public static class ConsoleApiExceptionMiddleware
 
         context.Response.Clear();
         context.Response.StatusCode = statusCode;
-        await context.Response.WriteAsJsonAsync(new ConsoleApiError(code, message, statusCode));
+        context.Response.ContentType = "application/json; charset=utf-8";
+        await JsonSerializer.SerializeAsync(
+            context.Response.Body,
+            new ConsoleApiError(code, message, statusCode),
+            MeansJsonContext.Default.ConsoleApiError);
     }
 }
 
