@@ -1,0 +1,21 @@
+---
+title: TypeScript Node SDK
+description: Use SigV4, presigning, and multipart helpers from Node.js.
+---
+
+The Node extension package lives in `SDKs/typescript/packages/sdk-node` and targets server-side TypeScript and Node.js tools.
+
+## Supported Scope
+
+- SigV4 header signing.
+- Presigned GET, PUT, and multipart UploadPart URLs.
+- File multipart upload helpers.
+- Shared v1 contract models with the browser-safe SDK.
+
+## Recommendation
+
+For local development, path-style addressing and the `http://localhost:5178/s3` alias are easiest to debug. In production, keep endpoint host, TLS, and signing host aligned.
+
+## Source
+
+See `SDKs/typescript/packages/sdk-node/README.md` for examples and build commands.

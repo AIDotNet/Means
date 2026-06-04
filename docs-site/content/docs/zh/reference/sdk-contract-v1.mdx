@@ -1,0 +1,25 @@
+---
+title: SDK Contract v1
+description: 官方 SDK 的共同协议、命名、认证和错误模型。
+---
+
+SDK v1 的机器可读规范位于 `SDKs/spec/means-sdk-v1.yaml`，人类可读合约位于 `SDKs/spec/means-sdk-v1.md`。生成 SDK 和手写 SDK 都应以这些文件为准。
+
+## Endpoint Styles
+
+SDK 必须支持：
+
+```text
+Path-style: https://api.means.local/{bucket}/{key}
+Virtual-hosted-style: https://{bucket}.means.local/{key}
+```
+
+默认本地开发使用 path-style，生产推荐 virtual-hosted-style。
+
+## Operations
+
+SDK 逻辑操作覆盖 bucket、object、versioning、lifecycle、CORS、notification、tagging、multipart 和 presign。语言命名遵循宿主语言习惯：C# 使用 PascalCase async，TypeScript 使用 camelCase。
+
+## Error Model
+
+S3 XML error 映射为 typed SDK error，并保留 HTTP status 和 S3-style error code。

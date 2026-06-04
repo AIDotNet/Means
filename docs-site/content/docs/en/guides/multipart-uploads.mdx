@@ -1,0 +1,21 @@
+---
+title: Multipart Uploads
+description: Part rules, ETags, and cleanup behavior for large objects.
+---
+
+Multipart Upload is used for large and resumable uploads. Means supports initiate, upload part, upload part copy, complete, abort, list parts, and list uploads.
+
+## Part Rules
+
+- `partNumber` must be `1..10000`.
+- Every non-final part must be at least `5 MiB`.
+- SDK high-level helpers default to `16 MiB` parts.
+- The final ETag is `md5(concat(part-md5-bytes))-part-count`.
+
+## Visibility
+
+Incomplete multipart uploads do not appear in normal object listings. The object becomes visible only after complete succeeds and metadata is committed.
+
+## Cleanup
+
+Incomplete uploads are cleaned by a background task according to configuration. The frontend cancel path best-effort calls abort, but disk cleanup must not depend on the browser request succeeding.

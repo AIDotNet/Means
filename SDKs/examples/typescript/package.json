@@ -1,0 +1,12 @@
+{
+  "name": "means-sdk-typescript-examples",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "node-basic": "node node-basic.mjs"
+  },
+  "dependencies": {
+    "@means/sdk": "file:../../typescript/packages/sdk",
+    "@means/sdk-node": "file:../../typescript/packages/sdk-node"
+  }
+}

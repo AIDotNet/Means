@@ -1,0 +1,22 @@
+---
+title: S3 Compatibility Model
+description: Means 如何选择 S3 兼容范围和明确差异。
+---
+
+Means 的目标是覆盖常用 S3 客户端和对象存储工作流，而不是逐字节模拟所有 AWS S3 边缘行为。
+
+## 已覆盖能力
+
+- Bucket/Object CRUD、ListObjectsV2、Range GET。
+- SigV4 header signing 和 query presign。
+- Multipart Upload、UploadPartCopy、ListParts、ListMultipartUploads。
+- Versioning、delete marker、按 `versionId` 访问。
+- Object tagging、Lifecycle、CORS、基础 Bucket Policy。
+
+## 客户端目标
+
+兼容性矩阵以 AWS CLI、boto3、aws-sdk-js v3、rclone 和 MinIO Client 的常用命令作为验收目标。
+
+## 明确差异
+
+`CompleteMultipartUpload` 失败时，Means 直接返回 4xx XML 错误，不模拟 AWS 的 `200 OK` 嵌入错误。Bucket notification 当前保留配置接口，事件投递 worker 待后续实现。

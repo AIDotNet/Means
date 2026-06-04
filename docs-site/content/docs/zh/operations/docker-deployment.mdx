@@ -1,0 +1,32 @@
+---
+title: Docker Deployment
+description: 使用 Compose 部署单节点 XlFs，并理解需要覆盖的生产变量。
+---
+
+仓库根目录的 `compose.yaml` 是单节点 XlFs 部署入口。它适合本地验证、小规模环境和部署流程演练。
+
+## 启动
+
+```bash
+docker compose up -d --build
+```
+
+服务默认暴露：
+
+```text
+http://localhost:5178
+```
+
+## 必须覆盖
+
+生产环境至少覆盖：
+
+- Console 管理员用户名和密码。
+- 默认 S3 AccessKey/SecretKey。
+- XlFs 磁盘路径和持久化卷。
+- `/metrics` 的网络访问边界。
+- OTel collector endpoint（如果启用 tracing）。
+
+## 升级
+
+升级前备份数据目录和元数据快照。升级后检查 `/metrics`、Console Health 页面和后台任务状态。

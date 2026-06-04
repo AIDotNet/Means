@@ -1,0 +1,24 @@
+---
+title: Presigned URLs
+description: 为浏览器和临时客户端生成 GET、PUT 与 multipart 上传链接。
+---
+
+预签名 URL 适合让不持有 secret key 的客户端临时访问对象。Means 支持 GET、PUT 和 multipart `UploadPart` 预签名。
+
+## 推荐模式
+
+后端持有 AccessKey/SecretKey 并生成 URL，浏览器只拿到短期 URL。浏览器不应执行 SigV4 secret signing。
+
+## 过期时间
+
+SDK v1 最大过期时间为 `604800` 秒，也就是 7 天。生产中建议按业务窗口使用更短时间。
+
+## 地址风格
+
+本地开发可使用同源 alias：
+
+```text
+http://localhost:5178/s3/{bucket}/{key}
+```
+
+生产环境建议使用 path-style 或 virtual-hosted-style，并确保主机名、TLS 与签名 host 一致。

@@ -1,0 +1,4 @@
+{
+  "title": "Operations",
+  "pages": ["docker-deployment", "multinode-topology", "production-checklist", "metrics-alerting", "capacity-performance", "troubleshooting"]
+}

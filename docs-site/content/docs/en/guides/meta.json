@@ -1,0 +1,4 @@
+{
+  "title": "Guides",
+  "pages": ["manage-buckets-and-objects", "presigned-urls", "multipart-uploads", "versioning-lifecycle", "csharp-sdk", "typescript-browser-sdk", "typescript-node-sdk"]
+}

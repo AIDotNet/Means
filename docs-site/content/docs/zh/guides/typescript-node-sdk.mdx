@@ -1,0 +1,21 @@
+---
+title: TypeScript Node SDK
+description: 在 Node.js 中使用 SigV4、预签名和 multipart helper。
+---
+
+Node 扩展包位于 `SDKs/typescript/packages/sdk-node`，适合服务端 TypeScript 和 Node.js 工具。
+
+## 支持范围
+
+- SigV4 header signing。
+- GET、PUT 和 multipart UploadPart 预签名。
+- 文件 multipart upload helper。
+- 与 browser-safe SDK 共享 v1 合约模型。
+
+## 使用建议
+
+本地开发时使用 path-style 和 `http://localhost:5178/s3` alias 更容易调试。生产部署中确保 endpoint host、TLS 和签名 host 一致。
+
+## 源文件
+
+查看 `SDKs/typescript/packages/sdk-node/README.md` 获取示例和构建命令。

@@ -1,0 +1,26 @@
+---
+title: Access the Console
+description: 登录 Means Console 并理解管理面能力。
+---
+
+Console 是 Means 的管理面。它通过 `/api/console` JSON API 工作，前端由仓库内 `web` 项目构建并随服务托管。
+
+## 功能范围
+
+- Bucket 创建、删除和对象浏览。
+- Bucket Policy、AccessKey、系统设置和审计日志。
+- 集群、节点、磁盘健康和诊断导出。
+- 后台任务状态和手动触发。
+- 预签名上传/下载链接生成。
+
+## 开发访问
+
+```text
+http://localhost:5178
+```
+
+开发 profile 使用 `admin` / `meansadmin`。Compose 默认使用 `meansadmin` / `meansadmin-local`。
+
+## 安全要求
+
+生产环境中，如果仍使用默认 Console 凭证，服务会拒绝启动。也应替换默认 S3 AccessKey/SecretKey。

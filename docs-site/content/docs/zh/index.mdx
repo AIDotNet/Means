@@ -1,0 +1,22 @@
+---
+title: Means
+description: 自部署的 S3-compatible 对象存储文档入口。
+---
+
+Means 是一个可自部署的 S3-compatible 对象存储服务，默认使用 MinIO-inspired 的 `XlFs` 存储后端，并提供 Console 管理面、Prometheus 指标、OpenTelemetry tracing 入口、C# SDK 和 TypeScript SDK。
+
+## 常用入口
+
+- [Docker Compose 快速开始](./get-started/quickstart-docker)：最快启动单节点 XlFs 环境。
+- [连接 S3 客户端](./get-started/s3-clients)：使用 AWS CLI、SDK 或同源 `/s3` alias 访问数据面。
+- [架构概览](./concepts/architecture)：理解协议层、存储层、Console 和 SDK 的边界。
+- [配置参考](./reference/configuration)：查看 `Means:*` 配置树、默认值和生产注意事项。
+- [指标与告警](./operations/metrics-alerting)：接入 Prometheus 并设置核心告警。
+
+## 文档组织
+
+本站参考 OpenClaw 文档的信息架构：先帮助用户上手，再解释核心模型，随后进入任务指南、参考资料和运维排障。左侧导航按产品域分组，正文右侧保留页内目录，顶部搜索支持 `Ctrl K` 或 `Command K`。
+
+## 当前边界
+
+Means 当前重点覆盖单节点多盘和实验性多节点拓扑。Replication、Object Lock、完整 IAM/STS、真正的多节点分布式数据分片仍属于后续边界。

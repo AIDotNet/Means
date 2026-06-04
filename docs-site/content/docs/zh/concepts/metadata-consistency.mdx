@@ -1,0 +1,18 @@
+---
+title: Metadata and Consistency
+description: MeansLogDb 元数据、事务边界和可见性规则。
+---
+
+Means 将对象字节和对象可见性分开处理。字节文件可以先存在，但只有元数据提交后才对 S3 API 可见。
+
+## 元数据职责
+
+`MeansLogDb` 管理 bucket、object、version、multipart upload、part、AccessKey、policy、settings、audit、task 和 EC profile 等命名空间。
+
+## 强一致读写
+
+HEAD、GET、LIST 只读取已提交的 current object pointer。覆盖写使用同一个 batch 替换 current pointer，避免读路径看到半提交状态。
+
+## 快照与恢复
+
+`CreateMetadataSnapshotAsync` 可导出当前索引快照，`RestoreMetadataSnapshotAsync` 用快照替换当前索引并重建 WAL。legacy SQLite backend 仍使用 SQLite backup/restore。

@@ -1,0 +1,39 @@
+---
+title: Quickstart with Docker Compose
+description: Start a single-node Means service with the repository Compose file.
+---
+
+Docker Compose is the fastest way to validate Means. The default file starts a single-node XlFs environment and exposes the service at `http://localhost:5178`.
+
+## Start
+
+```bash
+docker compose up -d --build
+```
+
+Open the Console:
+
+```text
+URL: http://localhost:5178
+User: meansadmin
+Password: meansadmin-local
+```
+
+Default S3 credentials:
+
+```text
+AccessKey: meansadmin
+SecretKey: meansadmin-local-secret
+```
+
+## Verify
+
+Create a bucket from the Console and upload an object. You can also use the same-origin S3 alias:
+
+```text
+http://localhost:5178/s3/{bucket}/{key}
+```
+
+## Note
+
+Production deployments must override the default Console password and default AccessKey/SecretKey. See [Multi-node Experimental Topology](../operations/multinode-topology) for the lab topology.

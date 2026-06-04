@@ -1,0 +1,22 @@
+---
+title: Use Versioning and Lifecycle
+description: 启用版本控制、访问 versionId，并配置 lifecycle 清理。
+---
+
+Means 支持 bucket versioning、delete marker、按 `versionId` 访问对象，以及基础 lifecycle 规则。
+
+## Versioning
+
+Bucket versioning 状态包括 `Enabled`、`Suspended` 和未配置。启用后，普通 DELETE 会写入 delete marker；指定 `versionId` 的 DELETE 会永久删除对应版本。
+
+## Lifecycle
+
+Lifecycle 支持：
+
+- current object expiration by `Expiration.Days`
+- noncurrent version cleanup by `NoncurrentVersionExpiration.NoncurrentDays`
+- incomplete multipart cleanup by `AbortIncompleteMultipartUpload.DaysAfterInitiation`
+
+## 注意
+
+Lifecycle worker 作为后台任务运行。运维时应结合 [Metrics and Alerting](../operations/metrics-alerting) 观察后台任务状态。

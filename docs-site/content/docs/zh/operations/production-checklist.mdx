@@ -1,0 +1,27 @@
+---
+title: Production Checklist
+description: 上生产前必须检查的安全、存储和可观测性项目。
+---
+
+Means 启动时会拒绝部分明显不安全的默认值，但生产准备仍需要人工确认。
+
+## Security
+
+- 替换 Console 默认用户和密码。
+- 替换默认 AccessKey/SecretKey。
+- 限制 `/metrics` 访问来源。
+- 避免在浏览器或前端配置中暴露 secret key。
+
+## Storage
+
+- 明确 `Means:Storage:Disks` 和持久化卷。
+- 检查 `WriteQuorum`、`ReadQuorum` 与磁盘数是否匹配。
+- 确认旧 SQLite 数据不会被误认为新 XlFs 命名空间。
+- 建立元数据快照与数据目录备份策略。
+
+## Observability
+
+- Prometheus 抓取 `/metrics`。
+- 配置核心告警。
+- 如需 tracing，启用 `Means:Telemetry:Enabled` 并配置 OTLP endpoint。
+- 定期检查后台任务失败计数。

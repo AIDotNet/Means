@@ -1,0 +1,18 @@
+---
+title: XlFs Storage Backend
+description: The default backend's disks, manifests, quorum, and metadata relationship.
+---
+
+`XlFs` is the current default backend for Means. It is inspired by MinIO-style disk layout ideas and is designed around single-node multi-disk operation with a path for future distributed evolution. It uses object manifests, replica/shard files, and the `MeansLogDb` metadata index.
+
+## Disk Layout
+
+Each disk receives `.means.sys/format.json` to pin the format version. Object bytes, multipart parts, replica/shard files, and `xl.meta` manifests are data-layer assets. Buckets, objects, versions, uploads, policies, settings, and audit records are metadata-layer assets.
+
+## Write Semantics
+
+Writes create temporary files first, then write participating disks and manifests. The object becomes visible to HEAD, GET, and LIST only after the metadata batch commit succeeds.
+
+## Quorum
+
+`WriteQuorum` and `ReadQuorum` control the minimum available replica requirements for writes and reads. Defaults are useful for development and single-node validation; production should reevaluate them with disk count, capacity, and failure domains.

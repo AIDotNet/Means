@@ -1,0 +1,31 @@
+---
+title: Multi-node Experimental Topology
+description: 多节点 Compose 的用途、边界和访问地址。
+---
+
+`compose.multinode.yaml` 用于验证节点/磁盘拓扑、运维页面、诊断导出和集群心跳。它不是生产数据面负载均衡拓扑。
+
+## 启动
+
+```bash
+docker compose -f compose.multinode.yaml up -d --build
+```
+
+访问地址：
+
+```text
+http://localhost:5181  means-node1
+http://localhost:5182  means-node2
+http://localhost:5183  means-node3
+```
+
+## 重要边界
+
+每个节点仍拥有独立 XlFs 命名空间。在分布式 metadata/RPC 完成前，不要把 S3 数据面流量通过负载均衡器打到这些节点。
+
+## 适合验证
+
+- Console 集群页面。
+- 磁盘健康和心跳。
+- 诊断导出。
+- 后台任务可观测性。

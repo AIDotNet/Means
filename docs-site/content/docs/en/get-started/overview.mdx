@@ -1,0 +1,24 @@
+---
+title: Overview
+description: What Means is, what it contains, and where to start.
+---
+
+Means is for developers and operators who need self-hosted object storage. It provides an S3-compatible data plane, a cookie-authenticated Console control plane, the default XlFs storage backend, Prometheus metrics, and official SDKs.
+
+## Good Fits
+
+- Local development, test environments, and private deployments that need S3-compatible storage.
+- Services that need presigned URLs, multipart upload, versioning, lifecycle, CORS, tagging, and core S3 behavior.
+- Teams that need a Console for buckets, objects, AccessKeys, audit logs, cluster state, and disk health.
+
+## Repository Map
+
+- `src/Means`: ASP.NET Core entrypoint, Console API, S3 endpoint, and metrics.
+- `src/Means.Protocol.S3`: addressing, SigV4, S3 XML, and protocol validation.
+- `src/Means.Infrastructure.XlFs`: default storage backend.
+- `web`: React/Vite Console frontend.
+- `SDKs`: C#, browser-safe TypeScript, Node TypeScript, and protocol specs.
+
+## Next Step
+
+The fastest path is [Docker Compose quickstart](./quickstart-docker), then [connect S3 clients](./s3-clients) and read the [architecture overview](../concepts/architecture).

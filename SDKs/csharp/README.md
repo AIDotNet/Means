@@ -15,6 +15,8 @@ Reference the generated `Means.Client` package or project from your application.
 
 ## Basic usage
 
+For a runnable end-to-end sample, see `../examples/csharp-basic`. It covers bucket creation, object upload/download, presigned GET/PUT URLs, versioning, lifecycle, and multipart upload.
+
 ```csharp
 using Means;
 

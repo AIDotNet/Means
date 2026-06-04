@@ -1,0 +1,20 @@
+---
+title: TypeScript Browser SDK
+description: Use anonymous access and presigned URLs safely from browsers.
+---
+
+The browser-safe TypeScript SDK lives in `SDKs/typescript/packages/sdk`. It does not perform secret-key SigV4 signing.
+
+## Supported Scope
+
+- Anonymous `GET`, `HEAD`, and `ListObjectsV2` when bucket policy allows it.
+- `GET` and `PUT` through presigned URLs.
+- Browser-oriented object access helpers.
+
+## Security Rule
+
+Browsers must not handle AccessKey/SecretKey credentials. For private object upload or download, generate presigned URLs on the backend.
+
+## Build
+
+The TypeScript workspace is under `SDKs/typescript`; package-level notes are in `SDKs/typescript/README.md`.

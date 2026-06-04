@@ -1,0 +1,38 @@
+---
+title: Configuration Reference
+description: Key Means settings, defaults, and production overrides.
+---
+
+Means configuration lives in `src/Means/appsettings.json` and can be overridden through environment variables. Production deployments should review Console credentials, S3 credentials, storage paths, rate limits, metrics, and telemetry.
+
+## S3
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `Means:S3:ServiceHost` | `api.means.local` | path-style host |
+| `Means:S3:DomainSuffix` | `means.local` | virtual-hosted-style suffix |
+| `Means:S3:AliasPrefix` | `/s3` | same-origin alias prefix |
+
+## Storage
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `Means:Storage:Backend` | `XlFs` | default storage backend |
+| `Means:Storage:ObjectsPath` | `data/objects` | single-disk or legacy object path |
+| `Means:Storage:Disks` | compose-specific | XlFs disk roots |
+| `Means:Storage:WriteQuorum` | `3` | minimum write quorum |
+| `Means:Storage:ReadQuorum` | `1` | minimum read quorum |
+| `Means:Storage:VerifyChecksumOnRead` | `false` | synchronous checksum verification during reads |
+
+## Limits and Rate Limits
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `Means:RequestLimits:MaxUploadSizeBytes` | `1073741824` | single PUT or UploadPart request body limit |
+| `Means:RequestLimits:MaxConcurrentUploadRequests` | `64` | global concurrent upload request limit |
+| `Means:RateLimits:Enabled` | `true` | fixed-window API rate limits |
+| `Means:RateLimits:S3PermitLimit` | `1200` | S3 requests per window |
+
+## Console and Telemetry
+
+Replace `Means:Console:AdminUser`, `Means:Console:AdminPassword`, `Means:Storage:DefaultAccessKey`, and `Means:Storage:DefaultSecretKey` before production use. Enable OpenTelemetry with `Means:Telemetry:Enabled=true` and set `Means:Telemetry:OtlpEndpoint` when exporting traces.

@@ -1,0 +1,26 @@
+---
+title: Access the Console
+description: Log in to the Means Console and understand the control-plane surface.
+---
+
+The Console is the Means control plane. It uses the `/api/console` JSON API, and the frontend is built from the repository `web` project.
+
+## Capability Surface
+
+- Create and delete buckets, browse objects.
+- Manage bucket policy, AccessKeys, system settings, and audit logs.
+- Inspect cluster state, nodes, disk health, and diagnostics.
+- View and trigger background tasks.
+- Generate presigned upload and download links.
+
+## Development Access
+
+```text
+http://localhost:5178
+```
+
+The development profile uses `admin` / `meansadmin`. Compose uses `meansadmin` / `meansadmin-local`.
+
+## Security Requirement
+
+In production, the service refuses to start with default Console credentials. Replace the default S3 AccessKey/SecretKey as well.

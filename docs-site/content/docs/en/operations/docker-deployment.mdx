@@ -1,0 +1,32 @@
+---
+title: Docker Deployment
+description: Deploy single-node XlFs with Compose and understand production overrides.
+---
+
+The repository `compose.yaml` is the entrypoint for a single-node XlFs deployment. It is suitable for local validation, small environments, and deployment rehearsals.
+
+## Start
+
+```bash
+docker compose up -d --build
+```
+
+The service is exposed at:
+
+```text
+http://localhost:5178
+```
+
+## Required Overrides
+
+At minimum, production should override:
+
+- Console administrator username and password.
+- Default S3 AccessKey/SecretKey.
+- XlFs disk paths and persistent volumes.
+- Network access to `/metrics`.
+- OTel collector endpoint when tracing is enabled.
+
+## Upgrade
+
+Before upgrading, back up data directories and metadata snapshots. After upgrading, check `/metrics`, the Console Health page, and background task state.

@@ -1,0 +1,25 @@
+---
+title: Error Model
+description: S3 XML errors, Console JSON errors, and SDK error mapping.
+---
+
+Means keeps S3-style error semantics externally. The S3 data plane returns XML, Console APIs return JSON, and SDKs map protocol errors to typed errors.
+
+## S3 XML
+
+S3 errors include:
+
+- `Code`
+- `Message`
+- `RequestId`
+- `Resource`
+
+For example, when upload concurrency is exceeded, the S3 data plane returns a `SlowDown` XML error with `Retry-After`.
+
+## Console JSON
+
+Console APIs use JSON error bodies and preserve stable error codes. Login, Console API, and S3 data plane routes all have fixed-window rate limiting.
+
+## SDK
+
+SDK errors preserve `code`, `message`, `statusCode`, `requestId`, and `resource`. Callers should not depend on localized text to classify errors.

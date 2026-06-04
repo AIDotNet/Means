@@ -1,0 +1,22 @@
+---
+title: Architecture Overview
+description: How the protocol layer, storage layer, Console, and SDKs work together.
+---
+
+Means hosts both the data plane and control plane in an ASP.NET Core service. S3 endpoints handle object-storage protocol behavior, Console APIs handle management and operations, and storage backends plug in through core abstractions.
+
+## Main Layers
+
+- Protocol: `Means.Protocol.S3` handles S3 addressing, SigV4 verification, XML serialization, and naming rules.
+- Core: `Means.Core` defines models and abstractions for objects, buckets, cluster state, policies, and background tasks.
+- Storage: `Means.Infrastructure.XlFs` is the default backend; `SqliteFs` remains as a legacy/test adapter.
+- Service: `src/Means` composes endpoints, middleware, background tasks, metrics, and Console APIs.
+- Console: `web` builds static assets and talks to `/api/console`.
+
+## Data Plane Path
+
+S3 requests are routed, bucket/key addressing is resolved, authentication and authorization run, and the request calls `IObjectStore`. Writes land temporary object or part files first, then commit metadata so the object becomes visible only after the final commit.
+
+## Control Plane Path
+
+The Console uses cookie sessions. It manages buckets, AccessKeys, settings, audit logs, diagnostics, background tasks, and cluster health.

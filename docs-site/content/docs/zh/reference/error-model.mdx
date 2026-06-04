@@ -1,0 +1,25 @@
+---
+title: Error Model
+description: S3 XML 错误、Console JSON 错误和 SDK error 映射。
+---
+
+Means 对外保持 S3-style 错误语义。S3 数据面返回 XML，Console API 返回 JSON，SDK 将协议错误映射为 typed error。
+
+## S3 XML
+
+S3 错误包含：
+
+- `Code`
+- `Message`
+- `RequestId`
+- `Resource`
+
+例如超出上传并发限制时，S3 数据面返回 `SlowDown` XML 错误并带 `Retry-After`。
+
+## Console JSON
+
+Console API 使用 JSON error body，并同样保留稳定的错误 code。登录、Console API 和 S3 数据面都有固定窗口限流。
+
+## SDK
+
+SDK 错误模型保留 `code`、`message`、`statusCode`、`requestId` 和 `resource`，调用方不应依赖本地化文本判断错误类型。

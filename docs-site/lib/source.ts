@@ -1,0 +1,40 @@
+import { docs } from 'collections/server';
+import { loader } from 'fumadocs-core/source';
+import { lucideIconsPlugin } from 'fumadocs-core/source/lucide-icons';
+import { i18n } from './i18n';
+import { docsContentRoute, docsImageRoute, docsRoute } from './shared';
+
+export const source = loader({
+  baseUrl: docsRoute,
+  source: docs.toFumadocsSource(),
+  i18n,
+  plugins: [lucideIconsPlugin()],
+});
+
+export function getPageImage(page: (typeof source)['$inferPage']) {
+  const locale = page.locale ?? i18n.defaultLanguage;
+  const segments = [...page.slugs, 'image.png'];
+
+  return {
+    segments,
+    url: `/${locale}${docsImageRoute}/${segments.join('/')}`,
+  };
+}
+
+export function getPageMarkdownUrl(page: (typeof source)['$inferPage']) {
+  const locale = page.locale ?? i18n.defaultLanguage;
+  const segments = [...page.slugs, 'content.md'];
+
+  return {
+    segments,
+    url: `/${locale}${docsContentRoute}/${segments.join('/')}`,
+  };
+}
+
+export async function getLLMText(page: (typeof source)['$inferPage']) {
+  const processed = await page.data.getText('processed');
+
+  return `# ${page.data.title} (${page.url})
+
+${processed}`;
+}

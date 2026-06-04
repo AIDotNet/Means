@@ -1,0 +1,20 @@
+---
+title: TypeScript Browser SDK
+description: 在浏览器中安全使用匿名访问和预签名 URL。
+---
+
+browser-safe TypeScript SDK 位于 `SDKs/typescript/packages/sdk`。它不执行 secret-key SigV4 signing。
+
+## 支持范围
+
+- bucket policy 允许时的匿名 `GET`、`HEAD` 和 `ListObjectsV2`。
+- 使用预签名 URL 执行 `GET` 和 `PUT`。
+- 面向浏览器传输的对象访问 helper。
+
+## 安全规则
+
+浏览器不应接触 AccessKey/SecretKey。需要上传或下载私有对象时，由后端生成预签名 URL。
+
+## 构建
+
+TypeScript workspace 位于 `SDKs/typescript`，包说明见 `SDKs/typescript/README.md`。

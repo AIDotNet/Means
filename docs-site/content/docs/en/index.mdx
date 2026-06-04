@@ -1,0 +1,22 @@
+---
+title: Means
+description: Documentation hub for the self-hosted S3-compatible object storage service.
+---
+
+Means is a self-hosted S3-compatible object storage service. It uses a MinIO-inspired `XlFs` backend by default and ships with a Console API, web console, Prometheus metrics, optional OpenTelemetry tracing, a C# SDK, and TypeScript SDKs.
+
+## Common Entry Points
+
+- [Docker Compose quickstart](./get-started/quickstart-docker): start a single-node XlFs environment quickly.
+- [Connect S3 clients](./get-started/s3-clients): use AWS CLI, SDKs, or the same-origin `/s3` alias.
+- [Architecture overview](./concepts/architecture): understand the protocol, storage, Console, and SDK boundaries.
+- [Configuration reference](./reference/configuration): review the `Means:*` configuration tree and production notes.
+- [Metrics and alerting](./operations/metrics-alerting): connect Prometheus and define core alerts.
+
+## Documentation Model
+
+This site follows the product-docs pattern used by OpenClaw: onboarding first, concepts second, task guides next, then reference and operations. The left sidebar is grouped by product domain, pages keep an on-page table of contents, and search is available with `Ctrl K` or `Command K`.
+
+## Current Boundaries
+
+Means currently focuses on single-node multi-disk deployments and experimental multi-node topology validation. Replication, Object Lock, full IAM/STS, and true distributed data sharding are future boundaries.

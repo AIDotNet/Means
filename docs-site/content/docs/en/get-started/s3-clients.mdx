@@ -1,0 +1,24 @@
+---
+title: Connect with S3 Clients
+description: Connect with the same-origin alias, path-style, or virtual-hosted-style addressing.
+---
+
+Means supports path-style, virtual-hosted-style, and a development-friendly same-origin alias.
+
+## Addressing Styles
+
+```text
+Same-origin alias: http://localhost:5178/s3/{bucket}/{key}
+Path-style:        http(s)://api.means.local/{bucket}/{key}
+Virtual-hosted:    http(s)://{bucket}.means.local/{key}
+```
+
+Local development usually starts with the same-origin alias. Production deployments should prefer virtual-hosted-style addressing.
+
+## Credentials
+
+Node and server-side SDKs can use SigV4 header signing or query presigning. Browser SDKs must not hold secret keys; use anonymous policy access or presigned URLs.
+
+## Client Compatibility Targets
+
+Means targets core smoke tests for AWS CLI, boto3, aws-sdk-js v3, rclone, and MinIO Client. See [S3 Compatibility Matrix](../reference/s3-compatibility-matrix) for the capability boundary.

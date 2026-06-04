@@ -1,0 +1,28 @@
+---
+title: Troubleshooting
+description: 启动、认证、上传、磁盘健康和搜索文档的常见排查路径。
+---
+
+排障时先确认运行方式、配置来源和当前后端，再查看日志、Console Health、Audit 和 `/metrics`。
+
+## 服务无法启动
+
+- 检查生产环境是否仍使用默认 Console 凭证或默认 S3 凭证。
+- 检查 XlFs 磁盘目录是否可写。
+- 如果存在 legacy SQLite 文件且没有 XlFs format，确认是否需要迁移或显式设置 `AllowNewFormatWithExistingSqlite=true`。
+
+## 认证失败
+
+- Console 登录失败先检查用户名、密码和登录限流。
+- S3 认证失败检查 endpoint host、path-style/virtual-hosted-style、region、service 和系统时间。
+- 预签名 URL 失败时确认 URL 未过期且请求方法与签名一致。
+
+## 上传失败
+
+- `SlowDown` 表示并发超过限制，应降低并发或调整 `MaxConcurrentUploadRequests`。
+- multipart complete 失败时检查 part 编号、part 大小和 ETag。
+- 大文件上传受单个 PUT/UploadPart request body limit 约束。
+
+## 磁盘和副本
+
+磁盘离线、replica 文件缺失或 repair 达到最大重试时，应优先确认磁盘挂载、权限、数据目录和 repair worker 日志。

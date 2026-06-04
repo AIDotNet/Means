@@ -1,0 +1,21 @@
+---
+title: Multipart Uploads
+description: 大对象上传的 part 规则、ETag 和清理行为。
+---
+
+Multipart Upload 用于大文件和可恢复上传。Means 支持 initiate、upload part、upload part copy、complete、abort、list parts 和 list uploads。
+
+## Part 规则
+
+- `partNumber` 范围是 `1..10000`。
+- 除最后一片外，每个 part 至少 `5 MiB`。
+- SDK high-level helper 默认使用 `16 MiB` part。
+- 完成后的 ETag 为 `md5(concat(part-md5-bytes))-part-count`。
+
+## 可见性
+
+未完成 multipart upload 不会出现在普通对象列表中。只有 complete 成功并提交元数据后，对象才可见。
+
+## 清理
+
+未完成上传会由后台任务按配置清理。前端取消上传会 best-effort 调用 abort，但磁盘释放不依赖浏览器请求一定成功。

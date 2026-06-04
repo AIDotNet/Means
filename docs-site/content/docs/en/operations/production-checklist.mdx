@@ -1,0 +1,27 @@
+---
+title: Production Checklist
+description: Security, storage, and observability checks before production.
+---
+
+Means refuses to start with some obviously unsafe defaults, but production readiness still needs manual review.
+
+## Security
+
+- Replace default Console username and password.
+- Replace default AccessKey/SecretKey.
+- Restrict access to `/metrics`.
+- Do not expose secret keys in browsers or frontend configuration.
+
+## Storage
+
+- Define `Means:Storage:Disks` and persistent volumes.
+- Check that `WriteQuorum` and `ReadQuorum` match disk count.
+- Ensure old SQLite data is not mistaken for a new XlFs namespace.
+- Establish metadata snapshot and data-directory backup strategy.
+
+## Observability
+
+- Scrape `/metrics` with Prometheus.
+- Configure core alerts.
+- If tracing is needed, enable `Means:Telemetry:Enabled` and set the OTLP endpoint.
+- Review background task failure counters regularly.

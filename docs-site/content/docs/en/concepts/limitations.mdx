@@ -1,0 +1,21 @@
+---
+title: Current Limitations
+description: Capabilities that Means v1 does not promise yet.
+---
+
+This page prevents experimental or reserved interfaces from being mistaken for production-ready capability.
+
+## Not Implemented Yet
+
+- Replication.
+- Object Lock / Retention.
+- Full IAM / STS.
+- Distributed data sharding and true cross-node erasure coding.
+
+## Reserved but Incomplete
+
+Bucket notification currently persists and reads configuration. Event delivery workers are not implemented yet.
+
+## Multi-node Compose
+
+`compose.multinode.yaml` is for validating nodes, disks, operations pages, and diagnostics. Each node still owns an independent XlFs namespace. Do not put a data-plane load balancer in front of those nodes before distributed metadata/RPC is implemented.

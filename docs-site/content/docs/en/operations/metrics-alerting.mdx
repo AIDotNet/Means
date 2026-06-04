@@ -1,0 +1,31 @@
+---
+title: Metrics and Alerting
+description: Prometheus scraping, core alerts, and response priority.
+---
+
+Means exposes Prometheus text metrics through `/metrics`. The endpoint is designed for direct Prometheus scraping and does not depend on Console cookies.
+
+## Scrape
+
+```yaml
+scrape_configs:
+  - job_name: means
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - localhost:5178
+```
+
+## Core Alerts
+
+- `MeansClusterNodeOffline`: node offline.
+- `MeansClusterDiskOffline`: disk offline or failed health probing.
+- `MeansReplicaFileMissing`: replica files referenced by manifests are unreadable.
+- `MeansObjectUnderReplicated`: insufficient object replicas.
+- `MeansReplicaRepairBacklog`: repair queue has not drained.
+- `MeansCapacityLow` / `MeansCapacityCritical`: capacity is below threshold.
+- `MeansBackgroundTaskFailures`: background task failures.
+
+## Response Priority
+
+Handle missing data files, offline disks, and repair max-attempt alerts first; then node offline and capacity alerts; then under-replicated objects, missing manifests, and background task backlog.

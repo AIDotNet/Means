@@ -4,6 +4,8 @@ Node.js extension for the Means TypeScript SDK.
 
 Use this package on trusted servers and CLIs. It accepts AccessKey/SecretKey credentials, signs requests with Signature Version 4, and creates presigned GET/PUT URLs for untrusted browser clients.
 
+See `../../../examples/typescript/node-basic.mjs` for a complete example covering object CRUD, presigned URL upload/download, versioning, and lifecycle.
+
 ## Install
 
 ```bash

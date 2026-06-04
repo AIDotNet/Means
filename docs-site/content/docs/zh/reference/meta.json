@@ -1,0 +1,4 @@
+{
+  "title": "Reference",
+  "pages": ["configuration", "s3-compatibility-matrix", "sdk-contract-v1", "metrics", "error-model"]
+}

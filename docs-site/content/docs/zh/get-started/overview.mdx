@@ -1,0 +1,24 @@
+---
+title: Overview
+description: Means 的定位、组成和第一步阅读路径。
+---
+
+Means 面向需要自部署对象存储的开发者和运维人员。它提供 S3-compatible 数据面、Cookie 鉴权的 Console 管理面、XlFs 默认存储后端、Prometheus 指标和官方 SDK。
+
+## 适合场景
+
+- 本地开发、测试环境或私有化部署中的 S3-compatible 存储。
+- 需要预签名 URL、multipart upload、versioning、lifecycle、CORS、tagging 等基础 S3 能力的服务。
+- 需要通过 Console 查看 bucket、对象、AccessKey、审计、集群和磁盘健康的团队。
+
+## 项目组成
+
+- `src/Means`：ASP.NET Core 服务入口、Console API、S3 endpoint 和 metrics。
+- `src/Means.Protocol.S3`：地址解析、SigV4、S3 XML 和协议校验。
+- `src/Means.Infrastructure.XlFs`：默认存储后端。
+- `web`：React/Vite Console 前端。
+- `SDKs`：C#、TypeScript browser-safe SDK、TypeScript Node SDK 和协议规范。
+
+## 下一步
+
+最快路径是先跑 [Docker Compose 快速开始](./quickstart-docker)，再阅读 [连接 S3 客户端](./s3-clients) 和 [架构概览](../concepts/architecture)。

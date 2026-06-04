@@ -1,0 +1,37 @@
+---
+title: Quickstart with .NET
+description: 使用本机 .NET SDK 运行 Means 服务。
+---
+
+本地开发时可以直接运行 ASP.NET Core 服务。仓库当前目标运行时是 `.NET SDK 10`。
+
+## 启动服务
+
+```bash
+dotnet restore Means.slnx
+dotnet build Means.slnx
+dotnet run --project src/Means/Means.csproj --launch-profile http
+```
+
+默认开发地址：
+
+```text
+http://localhost:5178
+```
+
+## Console 登录
+
+开发配置中的默认 Console 登录：
+
+```text
+User: admin
+Password: meansadmin
+```
+
+## 测试
+
+```bash
+dotnet test Means.slnx
+```
+
+测试覆盖 S3 endpoint、Console API、地址解析、策略判断、SDK 合约和 fixtures。

@@ -1,0 +1,37 @@
+---
+title: Quickstart with .NET
+description: Run the Means service directly with the local .NET SDK.
+---
+
+For local development, run the ASP.NET Core service directly. The repository currently targets `.NET SDK 10`.
+
+## Start the Service
+
+```bash
+dotnet restore Means.slnx
+dotnet build Means.slnx
+dotnet run --project src/Means/Means.csproj --launch-profile http
+```
+
+Default development URL:
+
+```text
+http://localhost:5178
+```
+
+## Console Login
+
+Default development Console login:
+
+```text
+User: admin
+Password: meansadmin
+```
+
+## Tests
+
+```bash
+dotnet test Means.slnx
+```
+
+The tests cover S3 endpoints, Console APIs, addressing, policy evaluation, SDK contracts, and fixtures.

@@ -1,0 +1,22 @@
+---
+title: C# SDK
+description: Use the official C# SDK with Means.
+---
+
+The C# SDK lives in `SDKs/csharp` and targets server-side .NET callers.
+
+## Capabilities
+
+The SDK exposes bucket, object, versioning, lifecycle, tagging, CORS, notification, multipart, and presign operations from the v1 contract. It follows C# style with PascalCase async methods.
+
+## Addressing and Auth
+
+Path-style addressing is recommended for local development. Production may use virtual-hosted-style addressing. Server-side SDK code can hold AccessKey/SecretKey credentials and perform SigV4 signing.
+
+## Error Model
+
+S3 XML errors map to typed SDK errors and preserve `code`, `message`, `statusCode`, `requestId`, and `resource`.
+
+## Source
+
+See `SDKs/csharp/README.md` and `SDKs/csharp/src` for the full API surface.

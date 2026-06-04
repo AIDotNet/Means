@@ -1,0 +1,24 @@
+---
+title: Presigned URLs
+description: Generate temporary GET, PUT, and multipart UploadPart URLs.
+---
+
+Presigned URLs are for clients that should not hold secret keys. Means supports presigned GET, PUT, and multipart `UploadPart` URLs.
+
+## Recommended Pattern
+
+The backend holds AccessKey/SecretKey credentials and generates URLs. Browsers receive only short-lived URLs and never perform secret-key SigV4 signing.
+
+## Expiration
+
+SDK v1 allows a maximum expiration of `604800` seconds, or seven days. Production systems should use shorter windows aligned with the workflow.
+
+## Addressing
+
+Local development can use the same-origin alias:
+
+```text
+http://localhost:5178/s3/{bucket}/{key}
+```
+
+Production should use path-style or virtual-hosted-style addressing and keep hostname, TLS, and signing host aligned.

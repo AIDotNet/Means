@@ -1,0 +1,22 @@
+---
+title: Capacity and Performance
+description: 容量规划、上传并发、读取校验和性能验证入口。
+---
+
+Means 的容量和性能取决于磁盘数、quorum、对象大小分布、multipart part size、后台任务和校验策略。
+
+## 容量
+
+监控 `means_cluster_capacity_bytes{state}`。当 available/total 低于 15% 时应规划扩容或迁移；低于 5% 时写入失败风险明显增加。
+
+## 上传并发
+
+`Means:RequestLimits:MaxConcurrentUploadRequests` 控制全局 PUT 和 UploadPart 并发。超过限制时返回 S3 XML `SlowDown` 并带 `Retry-After: 1`。
+
+## 读取校验
+
+`VerifyChecksumOnRead=false` 是默认值，避免大对象 GET 双倍 I/O。需要强读时可开启同步校验，但应评估性能影响。后台 scrub 仍可做校验与修复入队。
+
+## 压测
+
+仓库提供 `scripts/benchmarks/means-s3-benchmark.ps1` 作为基准入口。压测时应同时观察 `/metrics`、磁盘 I/O 和后台任务状态。

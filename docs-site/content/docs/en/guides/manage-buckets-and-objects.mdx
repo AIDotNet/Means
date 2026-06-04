@@ -1,0 +1,22 @@
+---
+title: Manage Buckets and Objects
+description: Use the Console to manage buckets, objects, and basic policy.
+---
+
+The Console is the primary entry point for bucket and object management. Open `http://localhost:5178` to create buckets, browse objects, upload files, delete objects, and inspect bucket settings.
+
+## Bucket Operations
+
+Create buckets from the Buckets page. Names must follow the DNS-compatible subset: 3 to 63 characters, lowercase letters, digits, hyphens, and dots, with a letter or digit at both ends.
+
+## Object Browser
+
+The bucket detail page provides object listing, upload, download, delete, and presigned-link actions. Large uploads use a multipart helper in the frontend.
+
+## Policy
+
+Bucket Policy manages basic allow/deny rules. Full IAM/STS and complex conditions are future boundaries.
+
+## Audit
+
+Object and management operations are written to audit logs and can be viewed from the Audit page.

@@ -1,0 +1,39 @@
+---
+title: Quickstart with Docker Compose
+description: 使用仓库内 Compose 文件启动单节点 Means。
+---
+
+Docker Compose 是验证 Means 的最快方式。默认文件启动单节点 XlFs 环境，并暴露服务到 `http://localhost:5178`。
+
+## 启动
+
+```bash
+docker compose up -d --build
+```
+
+访问 Console：
+
+```text
+URL: http://localhost:5178
+User: meansadmin
+Password: meansadmin-local
+```
+
+默认 S3 凭证：
+
+```text
+AccessKey: meansadmin
+SecretKey: meansadmin-local-secret
+```
+
+## 验证
+
+打开 Console 后，创建 bucket 并上传一个对象。也可以使用同源 S3 alias：
+
+```text
+http://localhost:5178/s3/{bucket}/{key}
+```
+
+## 注意
+
+生产部署必须覆盖默认 Console 密码和默认 AccessKey/SecretKey。多节点实验拓扑见 [Multi-node Experimental Topology](../operations/multinode-topology)。

@@ -1,0 +1,31 @@
+---
+title: Metrics and Alerting
+description: Prometheus 抓取配置、核心告警和处置优先级。
+---
+
+Means 通过 `/metrics` 暴露 Prometheus 文本指标。该端点设计为 Prometheus 直接抓取，不依赖 Console cookie。
+
+## Scrape
+
+```yaml
+scrape_configs:
+  - job_name: means
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - localhost:5178
+```
+
+## Core Alerts
+
+- `MeansClusterNodeOffline`：节点离线。
+- `MeansClusterDiskOffline`：磁盘离线或健康探测失败。
+- `MeansReplicaFileMissing`：manifest 引用的 replica 文件不可读。
+- `MeansObjectUnderReplicated`：对象副本不足。
+- `MeansReplicaRepairBacklog`：repair 队列未及时清空。
+- `MeansCapacityLow` / `MeansCapacityCritical`：容量低于阈值。
+- `MeansBackgroundTaskFailures`：后台任务失败。
+
+## 处置优先级
+
+先处理数据文件缺失、磁盘离线和 repair 达到最大重试；随后处理节点离线和容量告警；最后检查 under-replicated、without_manifest 和后台任务积压。

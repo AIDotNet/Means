@@ -1,0 +1,25 @@
+---
+title: SDK Contract v1
+description: Shared protocol, naming, authentication, and error rules for official SDKs.
+---
+
+The machine-readable SDK v1 spec is `SDKs/spec/means-sdk-v1.yaml`, and the human-readable contract is `SDKs/spec/means-sdk-v1.md`. Generated and hand-written SDKs should treat those files as the source of truth.
+
+## Endpoint Styles
+
+SDKs must support:
+
+```text
+Path-style: https://api.means.local/{bucket}/{key}
+Virtual-hosted-style: https://{bucket}.means.local/{key}
+```
+
+Path-style is the default for local development. Virtual-hosted-style is recommended for production.
+
+## Operations
+
+SDK logical operations cover buckets, objects, versioning, lifecycle, CORS, notification, tagging, multipart, and presign. Language naming follows host-language style: C# uses PascalCase async methods, TypeScript uses camelCase.
+
+## Error Model
+
+S3 XML errors map to typed SDK errors while preserving HTTP status and S3-style error code.

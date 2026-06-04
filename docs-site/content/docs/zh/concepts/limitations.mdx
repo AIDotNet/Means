@@ -1,0 +1,21 @@
+---
+title: Current Limitations
+description: 第一版 Means 明确不承诺的能力边界。
+---
+
+这个页面用于避免把实验性或预留接口误认为生产能力。
+
+## 尚未实现
+
+- Replication。
+- Object Lock / Retention。
+- 完整 IAM / STS。
+- 多节点分布式数据分片和真正跨节点纠删码。
+
+## 预留但未完成
+
+Bucket notification 当前支持配置持久化和读取，事件投递 worker 尚未实现。
+
+## 多节点 Compose
+
+`compose.multinode.yaml` 用于节点、磁盘、运维页面和诊断能力验证。每个节点仍拥有独立 XlFs 命名空间。在分布式 metadata/RPC 完成前，不应在这些节点前放置数据面负载均衡器。

@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -46,7 +45,9 @@ internal static class SigV4Signer
         var credentialScope = $"{shortDate}/{region}/{service}/aws4_request";
         var stringToSign = BuildStringToSign(amzDate, credentialScope, canonicalRequest);
         var signature = Hex(Hmac(DeriveSigningKey(credentials.SecretKey, shortDate, region, service), stringToSign));
-        request.Headers.Authorization = AuthenticationHeaderValue.Parse(
+        request.Headers.Remove("Authorization");
+        request.Headers.TryAddWithoutValidation(
+            "Authorization",
             $"{Algorithm} Credential={credentials.AccessKey}/{credentialScope}, SignedHeaders={signedHeaders}, Signature={signature}");
     }
 

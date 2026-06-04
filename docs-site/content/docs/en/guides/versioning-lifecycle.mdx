@@ -1,0 +1,22 @@
+---
+title: Use Versioning and Lifecycle
+description: Enable versioning, access versionId, and configure lifecycle cleanup.
+---
+
+Means supports bucket versioning, delete markers, object access by `versionId`, and basic lifecycle rules.
+
+## Versioning
+
+Bucket versioning can be `Enabled`, `Suspended`, or unconfigured. When enabled, a normal DELETE writes a delete marker; DELETE with a specific `versionId` permanently removes that version.
+
+## Lifecycle
+
+Lifecycle supports:
+
+- current object expiration by `Expiration.Days`
+- noncurrent version cleanup by `NoncurrentVersionExpiration.NoncurrentDays`
+- incomplete multipart cleanup by `AbortIncompleteMultipartUpload.DaysAfterInitiation`
+
+## Note
+
+The lifecycle worker runs as a background task. Operators should monitor background task state with [Metrics and Alerting](../operations/metrics-alerting).

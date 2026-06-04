@@ -1,0 +1,18 @@
+---
+title: Metadata and Consistency
+description: MeansLogDb metadata, transaction boundaries, and visibility rules.
+---
+
+Means separates object bytes from object visibility. Data files may exist before commit, but they become visible through the S3 API only after metadata commit succeeds.
+
+## Metadata Responsibility
+
+`MeansLogDb` manages namespaces for buckets, objects, versions, multipart uploads, parts, AccessKeys, policies, settings, audit records, tasks, and EC profiles.
+
+## Strong Read/Write Semantics
+
+HEAD, GET, and LIST read only committed current object pointers. Overwrites replace the current pointer in a single batch so readers never observe a half-committed object.
+
+## Snapshots and Restore
+
+`CreateMetadataSnapshotAsync` exports the current index snapshot. `RestoreMetadataSnapshotAsync` replaces the current index and rebuilds the WAL. The legacy SQLite backend continues to use SQLite backup/restore.

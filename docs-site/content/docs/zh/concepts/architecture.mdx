@@ -1,0 +1,22 @@
+---
+title: Architecture Overview
+description: Means 的协议层、存储层、Console 和 SDK 如何协作。
+---
+
+Means 由 ASP.NET Core 服务承载数据面和管理面。S3 endpoint 处理对象存储协议，Console API 处理运维与管理操作，存储后端通过核心抽象接入。
+
+## 主要层次
+
+- Protocol：`Means.Protocol.S3` 负责 S3 地址解析、SigV4 校验、XML 序列化和命名规则。
+- Core：`Means.Core` 定义对象、bucket、集群、策略、后台任务等模型与抽象。
+- Storage：默认 `Means.Infrastructure.XlFs`，保留 `SqliteFs` 作为 legacy/test adapter。
+- Service：`src/Means` 组合 endpoint、中间件、后台任务、metrics 和 Console API。
+- Console：`web` 构建为静态资源，通过 `/api/console` 与服务交互。
+
+## 数据面路径
+
+S3 请求进入路由后，先解析 bucket/key、认证与授权，再调用 `IObjectStore`。写入路径先落临时对象/part 文件，再提交元数据，使对象只在最终提交后可见。
+
+## 管理面路径
+
+Console 走 Cookie session。管理操作覆盖 bucket、AccessKey、系统设置、审计、诊断、后台任务和集群健康。

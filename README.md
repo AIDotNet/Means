@@ -185,7 +185,7 @@ docker compose -f compose.multinode.yaml up -d --build
 - 默认读取路径不在返回对象前同步扫全文件做 SHA256，避免大对象 GET 双倍磁盘 I/O；需要强读时校验时可开启 `VerifyChecksumOnRead`，后台 scrub 仍会做校验和修复入队。
 - S3 单次 `PutObject` 和 multipart `UploadPart` 会共享上传并发限制；超过限制返回 S3 XML 错误 `SlowDown` 和 `Retry-After: 1`。
 - Console 登录、Console API 和 S3 数据面都支持固定窗口 API 限流；超过限制时 Console 返回 JSON `SlowDown`，S3 返回 XML `SlowDown`，并带 `Retry-After`。
-- Prometheus 可抓取 `/metrics`；推荐告警规则见 `docs/ALERTING.md`。
+- Prometheus 可抓取 `/metrics`；推荐告警规则见 `docs/operations/deployment-observability.md`。
 - OpenTelemetry 默认关闭；设置 `Means:Telemetry:Enabled=true` 后会采集 ASP.NET Core 请求和 Means 后台任务 span，配置 `Means:Telemetry:OtlpEndpoint` 后导出到 collector。
 
 ## 开发与测试

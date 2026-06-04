@@ -1,0 +1,22 @@
+---
+title: Security Model
+description: Console session、AccessKey、SigV4、预签名 URL 和生产默认值。
+---
+
+Means 将管理面和数据面分开处理。Console 使用 Cookie session；S3 数据面使用 AccessKey/SecretKey、SigV4 和 bucket policy。
+
+## Console
+
+Console 登录请求受固定窗口限流保护。生产环境不能使用默认 Console 用户名和密码，否则服务会拒绝启动。
+
+## S3 数据面
+
+服务端和 Node SDK 可以持有 secret key 并执行 SigV4 签名。浏览器 SDK 不应暴露 secret key，只能使用匿名访问或后端生成的预签名 URL。
+
+## 预签名 URL
+
+SDK v1 默认 scope 使用 `AWS4-HMAC-SHA256`、service `s3`、region `us-east-1`。预签名 URL 最大过期时间为 `604800` 秒，即 7 天。
+
+## 后续边界
+
+完整 IAM/STS、Object Lock/Retention 和更完整的 policy condition 模型属于后续阶段。

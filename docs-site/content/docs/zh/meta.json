@@ -1,0 +1,5 @@
+{
+  "title": "Means Docs",
+  "description": "Means bilingual documentation for operators and developers.",
+  "pages": ["index", "get-started", "concepts", "guides", "reference", "operations"]
+}

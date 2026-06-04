@@ -1,0 +1,18 @@
+---
+title: XlFs Storage Backend
+description: 默认存储后端的磁盘、manifest、quorum 与元数据关系。
+---
+
+`XlFs` 是 Means 当前默认后端，灵感来自 MinIO 的磁盘布局思想。它面向单节点多盘和后续分布式演进，使用对象 manifest、replica/shard 文件和 `MeansLogDb` 元数据索引。
+
+## 磁盘布局
+
+每块磁盘会写入 `.means.sys/format.json` 来固定格式版本。对象字节、multipart part、replica/shard 文件和 `xl.meta` manifest 属于数据层；bucket、object、version、upload、policy、settings、audit 等属于元数据层。
+
+## 写入语义
+
+写入先生成临时文件，再写入参与磁盘和 manifest。只有元数据 batch commit 成功后，对象才会在 HEAD、GET 和 LIST 中可见。
+
+## Quorum
+
+`WriteQuorum` 和 `ReadQuorum` 控制写入与读取的最小可用副本要求。默认配置适合开发和单节点验证，生产应结合磁盘数量、容量和故障域重新评估。

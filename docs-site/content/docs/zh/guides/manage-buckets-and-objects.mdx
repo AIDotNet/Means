@@ -1,0 +1,22 @@
+---
+title: Manage Buckets and Objects
+description: 使用 Console 管理 bucket、对象和基础策略。
+---
+
+Console 是管理 bucket 和对象的主入口。进入 `http://localhost:5178` 后，可以创建 bucket、浏览对象、上传文件、删除对象，并查看 bucket 级设置。
+
+## Bucket 操作
+
+在 Buckets 页面创建 bucket。名称必须符合 DNS-compatible 子集：长度 3 到 63，仅小写字母、数字、连字符和点，首尾必须是字母或数字。
+
+## 对象浏览
+
+Bucket 详情页提供对象列表、上传、下载、删除和预签名链接入口。大文件上传会在前端自动走 multipart helper。
+
+## Policy
+
+Bucket Policy 页面用于设置基础 allow/deny 规则。完整 IAM/STS 和复杂 condition 仍属于后续能力边界。
+
+## 审计
+
+对象和管理操作会写入审计日志，可在 Audit 页面按时间线查看。

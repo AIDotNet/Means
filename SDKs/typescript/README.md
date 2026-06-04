@@ -7,6 +7,13 @@ This workspace contains the publishable TypeScript packages for Means object sto
 
 Both packages share the low-level S3-compatible API surface for bucket/object CRUD, multipart upload, `UploadPartCopy`, bucket versioning, versioned object reads/deletes, object version listing, lifecycle configuration, object tagging, bucket CORS, and bucket notification. Browser callers still use anonymous policy or presigned URLs for write access.
 
+## Examples
+
+Runnable and copyable examples live in `../examples`:
+
+- `../examples/typescript/node-basic.mjs` shows trusted Node.js signing, object CRUD, presigned URLs, versioning, and lifecycle.
+- `../examples/typescript/browser-presigned-upload.ts` shows browser upload/download through presigned URLs without exposing secret keys.
+
 ## Build
 
 ```bash

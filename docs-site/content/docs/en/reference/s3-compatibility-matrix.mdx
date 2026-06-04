@@ -1,0 +1,31 @@
+---
+title: S3 Compatibility Matrix
+description: Current S3 capability coverage, client targets, and explicit limits.
+---
+
+| Capability | Status | Notes |
+| --- | --- | --- |
+| Bucket CRUD | Supported | `PUT/HEAD/DELETE bucket` |
+| Object CRUD | Supported | `PUT/GET/HEAD/DELETE object` |
+| ListObjectsV2 | Supported | `prefix`, `delimiter`, `continuation-token`, `max-keys` |
+| Range GET | Supported | `206` with `Content-Range`; invalid ranges return `416 InvalidRange` |
+| SigV4 header/query presign | Supported | query subresources are covered |
+| Multipart Upload | Supported | initiate/upload/list/complete/abort |
+| UploadPartCopy | Supported | complete object copy and range copy |
+| CopyObject metadata directive | Supported | `COPY` and `REPLACE` |
+| Conditional headers | Supported | `If-Match`, `If-None-Match` |
+| Bucket Versioning | Supported | `Enabled`, `Suspended`, and unconfigured |
+| ListObjectVersions | Supported | key/version markers and pagination |
+| Object tagging | Supported | current and specified versions |
+| Bucket Lifecycle | Supported | expiration, noncurrent expiration, incomplete multipart abort |
+| Bucket CORS | Supported | CRUD and OPTIONS preflight |
+| Bucket notification | Reserved | configuration persistence only; event delivery pending |
+| Bucket Policy | Basic support | allow/deny; conditions still expanding |
+
+## Client Targets
+
+AWS CLI, boto3, aws-sdk-js v3, rclone, and MinIO Client are the first compatibility validation targets.
+
+## Explicit Limits
+
+Means does not emulate AWS S3's `CompleteMultipartUpload` `200 OK` embedded-error behavior. Failures return direct 4xx XML errors.

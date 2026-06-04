@@ -1,0 +1,22 @@
+---
+title: Capacity and Performance
+description: Capacity planning, upload concurrency, read verification, and benchmark entrypoints.
+---
+
+Means capacity and performance depend on disk count, quorum, object-size distribution, multipart part size, background tasks, and checksum strategy.
+
+## Capacity
+
+Monitor `means_cluster_capacity_bytes{state}`. Plan capacity expansion or migration when available/total drops below 15%; below 5%, write failures become likely.
+
+## Upload Concurrency
+
+`Means:RequestLimits:MaxConcurrentUploadRequests` controls global PUT and UploadPart concurrency. When exceeded, Means returns S3 XML `SlowDown` with `Retry-After: 1`.
+
+## Read Verification
+
+`VerifyChecksumOnRead=false` is the default to avoid double I/O for large GETs. Enable synchronous verification only when strong read-time validation is required and the performance cost is acceptable. Background scrub can still verify and enqueue repair.
+
+## Benchmarks
+
+Use `scripts/benchmarks/means-s3-benchmark.ps1` as the benchmark entrypoint. During benchmarks, observe `/metrics`, disk I/O, and background task state.

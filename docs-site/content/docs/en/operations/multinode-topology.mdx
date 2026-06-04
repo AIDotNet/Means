@@ -1,0 +1,31 @@
+---
+title: Multi-node Experimental Topology
+description: Purpose, boundaries, and addresses for the multi-node Compose topology.
+---
+
+`compose.multinode.yaml` validates node/disk topology, operations pages, diagnostics export, and cluster heartbeat. It is not a production data-plane load-balancing topology.
+
+## Start
+
+```bash
+docker compose -f compose.multinode.yaml up -d --build
+```
+
+Addresses:
+
+```text
+http://localhost:5181  means-node1
+http://localhost:5182  means-node2
+http://localhost:5183  means-node3
+```
+
+## Important Boundary
+
+Each node still owns an independent XlFs namespace. Do not load-balance S3 data-plane traffic across these nodes before distributed metadata/RPC is implemented.
+
+## Good For
+
+- Console cluster page validation.
+- Disk health and heartbeat checks.
+- Diagnostics export.
+- Background task observability.

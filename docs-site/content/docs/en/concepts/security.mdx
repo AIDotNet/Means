@@ -1,0 +1,22 @@
+---
+title: Security Model
+description: Console sessions, AccessKeys, SigV4, presigned URLs, and production defaults.
+---
+
+Means separates control-plane and data-plane security. The Console uses cookie sessions; the S3 data plane uses AccessKey/SecretKey credentials, SigV4, and bucket policy.
+
+## Console
+
+Console login is protected by fixed-window rate limiting. Production cannot use default Console credentials; the service refuses to start with them.
+
+## S3 Data Plane
+
+Server-side code and the Node SDK can hold secret keys and perform SigV4 signing. Browser SDKs must not expose secret keys; use anonymous access or backend-generated presigned URLs.
+
+## Presigned URLs
+
+SDK v1 defaults to `AWS4-HMAC-SHA256`, service `s3`, and region `us-east-1`. The maximum presigned URL expiration is `604800` seconds, or seven days.
+
+## Future Boundary
+
+Full IAM/STS, Object Lock/Retention, and richer policy conditions are future work.

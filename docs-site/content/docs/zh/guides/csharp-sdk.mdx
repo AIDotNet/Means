@@ -1,0 +1,22 @@
+---
+title: C# SDK
+description: 使用官方 C# SDK 调用 Means。
+---
+
+C# SDK 位于 `SDKs/csharp`，面向服务端 .NET 调用场景。
+
+## 能力
+
+SDK 暴露与 v1 合约一致的 bucket、object、versioning、lifecycle、tagging、CORS、notification、multipart 和预签名操作。语言风格使用 PascalCase async 方法。
+
+## 地址与认证
+
+本地开发推荐 path-style。生产可使用 virtual-hosted-style。服务端 SDK 可以持有 AccessKey/SecretKey 并执行 SigV4 签名。
+
+## 错误模型
+
+S3 XML 错误会映射为 typed SDK error，并保留 `code`、`message`、`statusCode`、`requestId` 和 `resource`。
+
+## 源文件
+
+查看 `SDKs/csharp/README.md` 和 `SDKs/csharp/src` 获取完整 API surface。

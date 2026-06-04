@@ -1,0 +1,22 @@
+---
+title: S3 Compatibility Model
+description: How Means chooses its S3-compatible surface and explicit differences.
+---
+
+Means targets common S3 clients and object-storage workflows. It does not try to reproduce every AWS S3 edge behavior byte-for-byte.
+
+## Covered Capabilities
+
+- Bucket/Object CRUD, ListObjectsV2, Range GET.
+- SigV4 header signing and query presigning.
+- Multipart Upload, UploadPartCopy, ListParts, ListMultipartUploads.
+- Versioning, delete markers, and `versionId` access.
+- Object tagging, Lifecycle, CORS, and basic Bucket Policy.
+
+## Client Targets
+
+The compatibility matrix is validated against common AWS CLI, boto3, aws-sdk-js v3, rclone, and MinIO Client workflows.
+
+## Explicit Differences
+
+When `CompleteMultipartUpload` fails, Means returns a direct 4xx XML error instead of emulating AWS S3's `200 OK` response with an embedded error. Bucket notification currently persists configuration, while event delivery is reserved for later work.

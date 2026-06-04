@@ -1,0 +1,28 @@
+---
+title: Troubleshooting
+description: Common paths for startup, authentication, uploads, disk health, and docs search.
+---
+
+When troubleshooting, first confirm the run mode, configuration source, and active backend. Then inspect logs, Console Health, Audit, and `/metrics`.
+
+## Service Does Not Start
+
+- Check whether production still uses default Console credentials or default S3 credentials.
+- Check that XlFs disk directories are writable.
+- If a legacy SQLite file exists without XlFs format, decide whether to migrate or explicitly set `AllowNewFormatWithExistingSqlite=true`.
+
+## Authentication Fails
+
+- For Console login, check username, password, and login rate limits.
+- For S3 auth, check endpoint host, path-style/virtual-hosted-style addressing, region, service, and system clock.
+- For presigned URL failures, ensure the URL is not expired and the request method matches the signature.
+
+## Upload Fails
+
+- `SlowDown` means concurrency exceeded the limit; reduce concurrency or tune `MaxConcurrentUploadRequests`.
+- Multipart complete failures usually involve part number, part size, or ETag issues.
+- Large uploads are constrained by the request body limit for each PUT or UploadPart.
+
+## Disks and Replicas
+
+For offline disks, missing replica files, or repair items reaching max attempts, first check mounts, permissions, data directories, and repair worker logs.

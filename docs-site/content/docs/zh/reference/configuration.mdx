@@ -1,0 +1,38 @@
+---
+title: Configuration Reference
+description: Means 关键配置项、默认值和生产覆盖建议。
+---
+
+Means 配置位于 `src/Means/appsettings.json`，也可通过环境变量覆盖。生产部署应重点检查 Console 凭证、S3 凭证、存储路径、限流、metrics 和 telemetry。
+
+## S3
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `Means:S3:ServiceHost` | `api.means.local` | path-style host |
+| `Means:S3:DomainSuffix` | `means.local` | virtual-hosted-style suffix |
+| `Means:S3:AliasPrefix` | `/s3` | same-origin alias prefix |
+
+## Storage
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `Means:Storage:Backend` | `XlFs` | default storage backend |
+| `Means:Storage:ObjectsPath` | `data/objects` | single-disk or legacy object path |
+| `Means:Storage:Disks` | compose-specific | XlFs disk roots |
+| `Means:Storage:WriteQuorum` | `3` | minimum write quorum |
+| `Means:Storage:ReadQuorum` | `1` | minimum read quorum |
+| `Means:Storage:VerifyChecksumOnRead` | `false` | synchronous checksum verification during reads |
+
+## Limits and Rate Limits
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `Means:RequestLimits:MaxUploadSizeBytes` | `1073741824` | single PUT or UploadPart request body limit |
+| `Means:RequestLimits:MaxConcurrentUploadRequests` | `64` | global concurrent upload request limit |
+| `Means:RateLimits:Enabled` | `true` | fixed-window API rate limits |
+| `Means:RateLimits:S3PermitLimit` | `1200` | S3 requests per window |
+
+## Console and Telemetry
+
+Replace `Means:Console:AdminUser`, `Means:Console:AdminPassword`, `Means:Storage:DefaultAccessKey`, and `Means:Storage:DefaultSecretKey` before production use. Enable OpenTelemetry with `Means:Telemetry:Enabled=true` and set `Means:Telemetry:OtlpEndpoint` when exporting traces.

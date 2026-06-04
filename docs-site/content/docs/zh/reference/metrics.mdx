@@ -1,0 +1,35 @@
+---
+title: Metrics Reference
+description: "`/metrics` 暴露的核心 Prometheus 指标。"
+---
+
+Means 暴露 Prometheus 文本指标：
+
+```text
+GET /metrics
+```
+
+## Core Metrics
+
+| Metric | Meaning |
+| --- | --- |
+| `means_storage_buckets` | 当前 bucket 数量 |
+| `means_storage_objects` | 当前可见对象数量 |
+| `means_storage_object_bytes` | 当前对象逻辑总大小 |
+| `means_cluster_capacity_bytes{state}` | total/available/used capacity |
+| `means_cluster_nodes{status}` | online/offline node count |
+| `means_cluster_disks{status}` | online/offline disk count |
+| `means_replica_repair_queue{status}` | replica repair backlog |
+| `means_background_task_failure_count{task}` | background task failures |
+| `means_background_task_status{task,status}` | current background task state |
+
+## Scrape Example
+
+```yaml
+scrape_configs:
+  - job_name: means
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - localhost:5178
+```
