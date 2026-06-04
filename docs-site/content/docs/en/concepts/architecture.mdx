@@ -9,7 +9,6 @@ Means hosts both the data plane and control plane in an ASP.NET Core service. S3
 
 - Protocol: `Means.Protocol.S3` handles S3 addressing, SigV4 verification, XML serialization, and naming rules.
 - Core: `Means.Core` defines models and abstractions for objects, buckets, cluster state, policies, and background tasks.
-- Storage: `Means.Infrastructure.XlFs` is the default backend; `SqliteFs` remains as a legacy/test adapter.
 - Service: `src/Means` composes endpoints, middleware, background tasks, metrics, and Console APIs.
 - Console: `web` builds static assets and talks to `/api/console`.
 

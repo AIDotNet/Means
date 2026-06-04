@@ -3,9 +3,13 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "aws-sdk-v3": "node aws-sdk-v3.mjs",
+    "check:s3": "node s3-compatibility-check.mjs",
     "node-basic": "node node-basic.mjs"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1062.0",
+    "@aws-sdk/s3-request-presigner": "^3.1062.0",
     "@means/sdk": "file:../../typescript/packages/sdk",
     "@means/sdk-node": "file:../../typescript/packages/sdk-node"
   }

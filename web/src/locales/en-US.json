@@ -45,7 +45,11 @@
       "mainNav": "Main navigation"
     },
     "badges": {
-      "singleNode": "Single node"
+      "singleNode": "Single node",
+      "xlfs": "XlFs"
+    },
+    "breadcrumbs": {
+      "root": "Console"
     },
     "nav": {
       "accessKeys": "Access keys",
@@ -56,9 +60,20 @@
       "cluster": "Cluster",
       "health": "Health"
     },
+    "product": {
+      "subtitle": "Object storage console"
+    },
     "search": {
       "open": "Open search",
-      "placeholder": "Search pages, buckets, or actions"
+      "placeholder": "Search pages, buckets, or actions",
+      "shortLabel": "Search",
+      "shortcut": "Ctrl K"
+    },
+    "sections": {
+      "distributed": "Distributed",
+      "governance": "Governance",
+      "overview": "Overview",
+      "storage": "Storage"
     },
     "userMenu": {
       "currentUser": "Current user",
@@ -493,6 +508,7 @@
   },
   "settings": {
     "errors": {
+      "invalidPublicOrigin": "Enter a valid http(s) origin",
       "invalidUploadLimit": "Enter a valid upload limit",
       "rangeLimit": "Allowed range: {{min}} - {{max}}",
       "saveFailed": "Failed to save settings"
@@ -504,7 +520,7 @@
     },
     "sections": {
       "architecture": {
-        "currentMode": "Current mode is single-site SQLite + filesystem baseline.",
+        "currentMode": "Current mode is XlFs with the self-built MeansLogDb metadata engine.",
         "futureAbstraction": "Server pool, erasure set, and healing/scrub are reserved for distributed evolution.",
         "title": "Architecture reserved"
       },
@@ -516,12 +532,14 @@
         "title": "Compression and cache"
       },
       "endpoints": {
+        "boundAlias": "Bound /s3 endpoint",
         "consoleAlias": "Console /s3 Alias",
+        "publicOrigin": "Public origin",
         "title": "Endpoints"
       },
       "localStorage": {
         "objectBlobs": "Object Blobs",
-        "sqliteMetadata": "SQLite Metadata",
+        "metadataStore": "LogDb Metadata",
         "title": "Local storage",
         "version": "Version"
       },
@@ -576,6 +594,70 @@
       "disks": "{{online}} disks online / {{offline}} offline",
       "available": "{{value}} available",
       "taskHealth": "{{running}} running / {{failed}} failed"
+    },
+    "readiness": {
+      "title": "Distributed readiness",
+      "loading": "Loading distributed readiness...",
+      "generated": "Updated {{value}}",
+      "states": {
+        "ready": "Ready",
+        "configured": "Configured",
+        "partial": "Foundation",
+        "pending": "Pending",
+        "attention": "Attention",
+        "disabled": "Disabled"
+      },
+      "topology": {
+        "title": "Topology",
+        "detail": "{{nodes}} nodes and {{disks}} disks online",
+        "degraded": "{{nodes}} nodes and {{disks}} disks offline"
+      },
+      "transport": {
+        "title": "Shard RPC",
+        "enabled": "Internal shard endpoint configured, {{limit}} per transfer",
+        "disabled": "Set an internal cluster token to accept shard transfers"
+      },
+      "erasureCoding": {
+        "title": "EC shards",
+        "enabled": "{{count}} enabled EC profiles; object shards are local today",
+        "disabled": "Create an EC profile before writing erasure-coded objects"
+      },
+      "repair": {
+        "title": "Repair",
+        "detail": "{{tasks}} maintenance tasks, {{pending}} pending repair items"
+      },
+      "routing": {
+        "title": "Ingress",
+        "detail": "S3 load balancing waits for distributed metadata and placement"
+      }
+    },
+    "transport": {
+      "title": "Data-plane transport",
+      "loading": "Loading transport diagnostics...",
+      "value": "Runtime",
+      "shardRpc": "Shard RPC",
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "maxTransfer": "Maximum shard transfer {{value}}",
+      "erasureCoding": "Erasure coding",
+      "ecProfiles": "{{enabled}} / {{total}} enabled",
+      "ecDetail": "Current writes use Reed-Solomon shards on local XlFs disks.",
+      "repair": "Repair and rebalance",
+      "repairQueue": "{{pending}} pending / {{failed}} failed",
+      "taskHealth": "{{running}} running / {{failed}} failed tasks",
+      "routing": "S3 routing",
+      "pending": "Pending",
+      "routingDetail": "Keep production load balancing off until placement is cross-node aware."
+    },
+    "topologyMap": {
+      "title": "Topology map",
+      "loading": "Loading topology...",
+      "empty": "No topology registered",
+      "value": "{{pools}} pools / {{nodes}} nodes",
+      "poolMeta": "{{nodes}} nodes / {{disks}} disks",
+      "noNodes": "No nodes are assigned to this pool",
+      "diskCount": "{{count}} disks",
+      "diskFree": "{{value}} free"
     },
     "nodes": {
       "title": "Nodes",
@@ -662,10 +744,36 @@
       "completed": "Completed",
       "failed": "Failed",
       "retryable": "Retryable",
+      "maxAttempts": "Max attempts",
+      "statusMix": "Status mix",
+      "oldestPending": "Oldest pending",
+      "lastUpdated": "Last updated",
+      "none": "-",
       "ecTitle": "Erasure coding",
       "ecProfiles": "Profiles",
       "ecEnabled": "Enabled",
       "ecDisabled": "Disabled"
+    },
+    "repairStatuses": {
+      "pending": "Pending",
+      "retryscheduled": "Retry scheduled",
+      "failed": "Failed"
+    },
+    "repairItems": {
+      "title": "Repair queue items",
+      "count": "{{count}} items",
+      "loading": "Loading repair queue...",
+      "empty": "No pending repair items",
+      "queued": "Queued",
+      "next": "Next",
+      "columns": {
+        "object": "Object",
+        "status": "Status",
+        "reason": "Reason",
+        "attempts": "Attempts",
+        "schedule": "Schedule",
+        "error": "Last error"
+      }
     },
     "tasks": {
       "title": "Maintenance control",

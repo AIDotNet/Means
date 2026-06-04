@@ -9,7 +9,9 @@ Means 提供三类 SDK：
 可运行示例位于 `SDKs/examples`：
 
 - `SDKs/examples/csharp-basic`
+- `SDKs/examples/csharp-aws-sdk`
 - `SDKs/examples/typescript/node-basic.mjs`
+- `SDKs/examples/typescript/aws-sdk-v3.mjs`
 - `SDKs/examples/typescript/browser-presigned-upload.ts`
 
 ## 端点选择
@@ -116,6 +118,45 @@ const url = client.createPresignedGetUrl({
 ```
 
 Node SDK 可以直接签名请求，也可以为浏览器端生成短期 presigned URL。
+
+## 官方 AWS SDK：S3-compatible 接入
+
+Means 的 S3 数据面可以通过官方 AWS S3 SDK 访问。示例位于 `SDKs/examples/csharp-aws-sdk` 和 `SDKs/examples/typescript/aws-sdk-v3.mjs`。
+
+C# `AWSSDK.S3` 需要配置自定义 `ServiceURL`、签名 region 和 path-style：
+
+```csharp
+using Amazon.S3;
+
+using var client = new AmazonS3Client(
+    accessKey,
+    secretKey,
+    new AmazonS3Config
+    {
+        ServiceURL = "http://localhost:5178/s3/",
+        AuthenticationRegion = "us-east-1",
+        ForcePathStyle = true,
+        UseHttp = true
+    });
+```
+
+Node.js `@aws-sdk/client-s3` 同样需要自定义 endpoint 和 `forcePathStyle`：
+
+```ts
+import { S3Client } from "@aws-sdk/client-s3";
+
+const client = new S3Client({
+  endpoint: "http://localhost:5178/s3/",
+  region: "us-east-1",
+  forcePathStyle: true,
+  credentials: {
+    accessKeyId: process.env.MEANS_ACCESS_KEY!,
+    secretAccessKey: process.env.MEANS_SECRET_KEY!,
+  },
+});
+```
+
+如果生产环境通过 `/s3/` 前缀暴露数据面，endpoint 也必须包含该路径；否则签名路径和实际路由会不一致。
 
 ## 浏览器：只执行 presigned URL
 

@@ -23,4 +23,8 @@ public sealed class ClusterOptions
     public int OfflineAfterSeconds { get; set; } = 60;
 
     public int DiskHealthIntervalSeconds { get; set; } = 30;
+
+    public string InternalAuthToken { get; set; } = "";
+
+    public long MaxShardTransferBytes { get; set; } = 5L * 1024 * 1024 * 1024;
 }

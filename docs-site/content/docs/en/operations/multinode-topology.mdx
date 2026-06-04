@@ -23,6 +23,8 @@ http://localhost:5183  means-node3
 
 Each node still owns an independent XlFs namespace. Do not load-balance S3 data-plane traffic across these nodes before distributed metadata/RPC is implemented.
 
+The internal shard RPC endpoint is reserved for later cross-node EC placement, repair, and rebalance. When enabled, every node must share `Means:Cluster:InternalAuthToken`; tune `Means:Cluster:MaxShardTransferBytes` for your network and disk envelope.
+
 ## Good For
 
 - Console cluster page validation.

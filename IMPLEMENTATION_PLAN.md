@@ -10,7 +10,6 @@
 ## 0. 当前已完成基线
 
 - [x] ASP.NET Core 数据面基础服务
-- [x] SQLite + filesystem 单机对象存储
 - [x] XlFs 自研存储后端默认接入
 - [x] MeansLogDb WAL + snapshot 元数据索引
 - [x] Bucket/Object 基础 CRUD
@@ -40,7 +39,6 @@
 
 ## 2. 元数据与一致性
 
-- [x] 替换单机 SQLite 元数据瓶颈的目标架构
 - [x] 实现 MeansLogDb append-only WAL、batch atomic commit、recovery replay
 - [x] 实现 MeansLogDb snapshot/restore
 - [x] 设计元数据事务边界

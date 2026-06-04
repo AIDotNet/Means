@@ -111,49 +111,41 @@ public sealed partial class XlFsStore
         var maxKeys = Math.Clamp(options.MaxKeys, 1, 1000);
         var prefix = options.Prefix ?? string.Empty;
         var dbPrefix = Keys.VersionPrefix(bucketName) + Escape(prefix);
-        var afterKey = VersionScanAfterKey(bucketName, options.KeyMarker, options.VersionIdMarker);
-        var page = new List<XlObjectRecord>(maxKeys + 1);
-        var currentGroup = new List<XlObjectRecord>();
-        string? currentKey = null;
-        string? scanAfter = afterKey;
-        var exhausted = false;
+        var rows = await Db.ScanPrefixAsync(dbPrefix, 100_000, null, cancellationToken);
+        var page = ApplyVersionMarker(
+                rows.Select(row => Deserialize<XlObjectRecord>(row.Value))
+                    .GroupBy(record => record.Key, StringComparer.Ordinal)
+                    .OrderBy(group => group.Key, StringComparer.Ordinal)
+                    .SelectMany(group => group.OrderByDescending(record => record.LastModified)),
+                options.KeyMarker,
+                options.VersionIdMarker)
+            .Take(maxKeys + 1)
+            .ToList();
 
-        while (page.Count <= maxKeys && !exhausted)
+        var commonPrefixes = new SortedSet<string>(StringComparer.Ordinal);
+        var visiblePage = new List<XlObjectRecord>(maxKeys);
+        foreach (var record in page)
         {
-            var rows = await Db.ScanPrefixAsync(dbPrefix, Math.Min(Math.Max(maxKeys * 4, 128), 4096), scanAfter, cancellationToken);
-            if (rows.Count == 0)
+            if (visiblePage.Count + commonPrefixes.Count >= maxKeys)
             {
-                exhausted = true;
                 break;
             }
 
-            foreach (var row in rows)
+            if (!string.IsNullOrEmpty(options.Delimiter))
             {
-                scanAfter = row.Key;
-                var record = Deserialize<XlObjectRecord>(row.Value);
-                if (currentKey is not null && !string.Equals(record.Key, currentKey, StringComparison.Ordinal))
+                var rest = record.Key.Length >= prefix.Length ? record.Key[prefix.Length..] : record.Key;
+                var delimiterIndex = rest.IndexOf(options.Delimiter, StringComparison.Ordinal);
+                if (delimiterIndex >= 0)
                 {
-                    AppendVersionGroup(page, currentGroup);
-                    currentGroup.Clear();
-                    if (page.Count > maxKeys)
-                    {
-                        break;
-                    }
+                    commonPrefixes.Add(prefix + rest[..(delimiterIndex + options.Delimiter.Length)]);
+                    continue;
                 }
-
-                currentKey = record.Key;
-                currentGroup.Add(record);
             }
 
-            exhausted = rows.Count < Math.Min(Math.Max(maxKeys * 4, 128), 4096);
+            visiblePage.Add(record);
         }
 
-        if (page.Count <= maxKeys && currentGroup.Count > 0)
-        {
-            AppendVersionGroup(page, currentGroup);
-        }
-
-        var visible = page.Take(maxKeys).ToArray();
+        var visible = visiblePage.ToArray();
         var current = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var key in visible.Select(row => row.Key).Distinct(StringComparer.Ordinal))
         {
@@ -184,27 +176,55 @@ public sealed partial class XlFsStore
                 row.ETag,
                 row.ContentLength,
                 row.LastModified)).ToArray(),
-            []);
+            commonPrefixes.ToArray());
     }
 
-    private static void AppendVersionGroup(List<XlObjectRecord> output, List<XlObjectRecord> group)
-    {
-        foreach (var record in group.OrderByDescending(row => row.LastModified))
-        {
-            output.Add(record);
-        }
-    }
-
-    private static string? VersionScanAfterKey(string bucketName, string? keyMarker, string? versionIdMarker)
+    private static IEnumerable<XlObjectRecord> ApplyVersionMarker(
+        IEnumerable<XlObjectRecord> records,
+        string? keyMarker,
+        string? versionIdMarker)
     {
         if (string.IsNullOrWhiteSpace(keyMarker))
         {
-            return null;
+            foreach (var record in records)
+            {
+                yield return record;
+            }
+
+            yield break;
         }
 
-        return string.IsNullOrWhiteSpace(versionIdMarker)
-            ? Keys.VersionPrefix(bucketName) + Escape(keyMarker) + ":\uffff"
-            : Keys.Version(bucketName, keyMarker, versionIdMarker);
+        var markerSeen = false;
+        foreach (var record in records)
+        {
+            var keyComparison = string.CompareOrdinal(record.Key, keyMarker);
+            if (keyComparison < 0)
+            {
+                continue;
+            }
+
+            if (keyComparison > 0)
+            {
+                yield return record;
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(versionIdMarker))
+            {
+                continue;
+            }
+
+            if (markerSeen)
+            {
+                yield return record;
+                continue;
+            }
+
+            if (string.Equals(record.VersionId, versionIdMarker, StringComparison.Ordinal))
+            {
+                markerSeen = true;
+            }
+        }
     }
 
     public async Task<ObjectInfo> PutObjectAsync(PutObjectRequest request, CancellationToken cancellationToken)
@@ -245,6 +265,11 @@ public sealed partial class XlFsStore
     {
         var info = await HeadObjectAsync(bucketName, key, versionId, cancellationToken);
         var manifest = await ReadManifestAsync(info, cancellationToken);
+        if (IsReedSolomonErasure(manifest))
+        {
+            return new ObjectData(info, await OpenErasureCodedObjectAsync(info, manifest, cancellationToken));
+        }
+
         if (manifest.Parts.Count == 1)
         {
             foreach (var shard in manifest.Parts[0].Shards.OrderBy(shard => shard.SetIndex))
@@ -328,14 +353,27 @@ public sealed partial class XlFsStore
         {
             var record = await Db.GetJsonAsync<XlObjectRecord>(Keys.Version(bucketName, key, versionId), cancellationToken)
                 ?? throw new MeansException(MeansErrorCodes.NoSuchVersion, "Object version does not exist.", 404);
-            await Db.PutBatchAsync([new LogDbMutation(Keys.Version(bucketName, key, versionId), null, true)], cancellationToken);
             var current = await Db.GetJsonAsync<XlObjectRecord>(Keys.CurrentObject(bucketName, key), cancellationToken);
+            var mutations = new List<LogDbMutation>
+            {
+                new(Keys.Version(bucketName, key, versionId), null, true)
+            };
             if (current?.VersionId == versionId)
             {
-                await Db.PutBatchAsync([new LogDbMutation(Keys.CurrentObject(bucketName, key), null, true)], cancellationToken);
+                var replacement = await FindLatestObjectVersionAsync(bucketName, key, versionId, cancellationToken);
+                mutations.Add(
+                    replacement is null
+                        ? new LogDbMutation(Keys.CurrentObject(bucketName, key), null, true)
+                        : new LogDbMutation(Keys.CurrentObject(bucketName, key), Serialize(replacement), false));
             }
 
-            DeleteObjectFilesQuietly(record);
+            await Db.PutBatchAsync(mutations, cancellationToken);
+
+            if (!record.IsDeleteMarker)
+            {
+                await DeleteObjectFilesQuietlyAsync(record, CancellationToken.None);
+            }
+
             return new DeleteObjectResult(bucketName, key, versionId, record.IsDeleteMarker);
         }
 
@@ -361,7 +399,7 @@ public sealed partial class XlFsStore
         await Db.PutBatchAsync(deleteMutations, cancellationToken);
         if (existing is not null)
         {
-            DeleteObjectFilesQuietly(existing);
+            await DeleteObjectFilesQuietlyAsync(existing, CancellationToken.None);
         }
 
         return new DeleteObjectResult(bucketName, key, null, false);
@@ -396,13 +434,20 @@ public sealed partial class XlFsStore
         CancellationToken cancellationToken)
     {
         var now = DateTimeOffset.UtcNow;
-        var shards = await WriteFullCopyShardsAsync(
+        var erasureWrite = await TryWriteErasureCodedShardsAsync(
+            bucketName,
+            objectId,
             sourcePath,
-            disk => ObjectRelativePath(bucketName, objectId, disk.SetIndex),
             length,
-            checksum,
-            "Insufficient online disks for write quorum.",
             cancellationToken);
+        var shards = erasureWrite?.Shards
+            ?? await WriteFullCopyShardsAsync(
+                sourcePath,
+                disk => ObjectRelativePath(bucketName, objectId, disk.SetIndex),
+                length,
+                checksum,
+                "Insufficient online disks for write quorum.",
+                cancellationToken);
 
         var record = new XlObjectRecord(bucketName, key, objectId, objectId, etag, length, contentType, now, false, metadata, new Dictionary<string, string>(), cacheControl, contentDisposition);
         var manifest = new XlObjectManifest(
@@ -416,25 +461,34 @@ public sealed partial class XlFsStore
             contentType,
             now,
             false,
-            new XlErasureInfo("full-copy-v1", Math.Max(1, _options.ErasureDataShards), Math.Max(0, _options.ErasureParityShards), 128 * 1024, WriteQuorum, ReadQuorum),
+            erasureWrite?.Erasure ?? new XlErasureInfo(FullCopyAlgorithm, Math.Max(1, _options.ErasureDataShards), Math.Max(0, _options.ErasureParityShards), 128 * 1024, WriteQuorum, ReadQuorum),
             [new XlPartManifest(1, "part.0", length, etag, checksum, shards)],
             metadata,
             new Dictionary<string, string>(),
             cacheControl,
             contentDisposition);
-        await WriteManifestCopiesAsync(bucketName, objectId, manifest, shards, cancellationToken);
-
-        var existing = await Db.GetJsonAsync<XlObjectRecord>(Keys.CurrentObject(bucketName, key), cancellationToken);
-        await Db.PutBatchAsync([
-            new LogDbMutation(Keys.Version(bucketName, key, objectId), Serialize(record), false),
-            new LogDbMutation(Keys.CurrentObject(bucketName, key), Serialize(record), false)
-        ], cancellationToken);
-        if (existing is not null && !string.Equals(await GetBucketVersioningStatusAsync(bucketName, cancellationToken), BucketVersioningStatuses.Enabled, StringComparison.Ordinal))
+        try
         {
-            DeleteObjectFilesQuietly(existing);
-        }
+            await WriteManifestCopiesAsync(bucketName, objectId, manifest, shards, cancellationToken);
 
-        return ToObjectInfo(record);
+            var existing = await Db.GetJsonAsync<XlObjectRecord>(Keys.CurrentObject(bucketName, key), cancellationToken);
+            await Db.PutBatchAsync([
+                new LogDbMutation(Keys.Version(bucketName, key, objectId), Serialize(record), false),
+                new LogDbMutation(Keys.CurrentObject(bucketName, key), Serialize(record), false)
+            ], cancellationToken);
+            if (existing is not null && !string.Equals(await GetBucketVersioningStatusAsync(bucketName, cancellationToken), BucketVersioningStatuses.Enabled, StringComparison.Ordinal))
+            {
+                await DeleteObjectFilesQuietlyAsync(existing, CancellationToken.None);
+            }
+
+            return ToObjectInfo(record);
+        }
+        catch
+        {
+            await DeleteManifestShardFilesQuietlyAsync(manifest, CancellationToken.None);
+            await DeleteObjectFilesQuietlyAsync(record, CancellationToken.None);
+            throw;
+        }
     }
 
     private async Task<(string ETag, string ChecksumSha256, long Length)> WriteTempObjectAsync(Stream input, string path, CancellationToken cancellationToken)
@@ -464,61 +518,165 @@ public sealed partial class XlFsStore
         return await Db.GetJsonAsync<string>(Keys.BucketVersioning(bucketName), cancellationToken) ?? BucketVersioningStatuses.Off;
     }
 
-    private void DeleteObjectFilesQuietly(XlObjectRecord record)
+    private async Task<XlObjectRecord?> FindLatestObjectVersionAsync(
+        string bucketName,
+        string key,
+        string excludedVersionId,
+        CancellationToken cancellationToken)
     {
-        var deletedAnyManifest = false;
-        var shardPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var rows = await Db.ScanPrefixAsync(Keys.VersionPrefix(bucketName) + Escape(key) + ":", 100_000, null, cancellationToken);
+        return rows.Select(row => Deserialize<XlObjectRecord>(row.Value))
+            .Where(record => !string.Equals(record.VersionId, excludedVersionId, StringComparison.Ordinal))
+            .OrderByDescending(record => record.LastModified)
+            .FirstOrDefault();
+    }
+
+    private async Task DeleteObjectFilesQuietlyAsync(XlObjectRecord record, CancellationToken cancellationToken)
+    {
+        var manifests = new List<XlObjectManifest>();
+        var localShardPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var remoteShards = new Dictionary<string, XlShardManifest>(StringComparer.Ordinal);
+        var manifestRelativePath = ObjectManifestRelativePath(record.BucketName, record.ObjectId);
         foreach (var disk in _disks)
         {
-            var manifestPath = Path.Combine(disk.RootPath, ObjectManifestRelativePath(record.BucketName, record.ObjectId));
+            var manifestPath = Path.Combine(disk.RootPath, manifestRelativePath);
             try
             {
-                if (!File.Exists(manifestPath))
+                if (File.Exists(manifestPath))
                 {
-                    continue;
-                }
-
-                var manifest = JsonSerializer.Deserialize(File.ReadAllText(manifestPath), XlJsonContext.Default.XlObjectManifest);
-                foreach (var shard in manifest?.Parts.SelectMany(part => part.Shards) ?? [])
-                {
-                    var shardDisk = _disks.FirstOrDefault(item => item.DiskId == shard.DiskId);
-                    if (shardDisk is not null)
+                    var manifest = JsonSerializer.Deserialize(File.ReadAllText(manifestPath), XlJsonContext.Default.XlObjectManifest);
+                    if (manifest is not null)
                     {
-                        shardPaths.Add(Path.Combine(shardDisk.RootPath, shard.RelativePath));
+                        manifests.Add(manifest);
                     }
                 }
-
-                File.Delete(manifestPath);
-                deletedAnyManifest = true;
             }
             catch
             {
             }
         }
 
-        foreach (var path in shardPaths)
+        foreach (var manifest in manifests)
+        {
+            foreach (var shard in manifest.Parts.SelectMany(part => part.Shards))
+            {
+                var shardDisk = _disks.FirstOrDefault(item => item.DiskId == shard.DiskId);
+                if (shardDisk is not null)
+                {
+                    localShardPaths.Add(Path.Combine(shardDisk.RootPath, shard.RelativePath));
+                }
+                else
+                {
+                    remoteShards[shard.DiskId + "|" + shard.RelativePath] = shard;
+                }
+            }
+        }
+
+        foreach (var path in localShardPaths)
         {
             DeleteFileQuietly(path);
         }
 
-        if (deletedAnyManifest)
+        foreach (var disk in _disks)
+        {
+            DeleteFileQuietly(Path.Combine(disk.RootPath, manifestRelativePath));
+        }
+
+        foreach (var shard in remoteShards.Values)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var node = await TryFindRemoteNodeForDiskAsync(shard.DiskId, cancellationToken);
+            if (node is null)
+            {
+                continue;
+            }
+
+            try
+            {
+                await _shardTransport.DeleteShardAsync(node, shard.DiskId, shard.RelativePath, cancellationToken);
+                await _shardTransport.DeleteManifestAsync(node, shard.DiskId, manifestRelativePath, cancellationToken);
+            }
+            catch
+            {
+            }
+        }
+
+        if (manifests.Count > 0)
         {
             return;
         }
 
         foreach (var disk in _disks)
         {
-            var dir = Path.Combine(disk.RootPath, "objects", BucketHash(record.BucketName), record.ObjectId);
+            DeleteDirectoryQuietly(Path.Combine(disk.RootPath, "objects", BucketHash(record.BucketName), record.ObjectId));
+        }
+    }
+
+    private async Task DeleteManifestShardFilesQuietlyAsync(
+        XlObjectManifest manifest,
+        CancellationToken cancellationToken)
+    {
+        var manifestRelativePath = ObjectManifestRelativePath(manifest.BucketName, manifest.ObjectId);
+        var remoteDiskIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var shard in manifest.Parts.SelectMany(part => part.Shards))
+        {
+            var disk = _disks.FirstOrDefault(item => item.DiskId == shard.DiskId);
+            if (disk is not null)
+            {
+                DeleteFileQuietly(Path.Combine(disk.RootPath, shard.RelativePath));
+                continue;
+            }
+
+            remoteDiskIds.Add(shard.DiskId);
+            var node = await TryFindRemoteNodeForDiskAsync(shard.DiskId, cancellationToken);
+            if (node is null)
+            {
+                continue;
+            }
+
             try
             {
-                if (Directory.Exists(dir))
-                {
-                    Directory.Delete(dir, recursive: true);
-                }
+                await _shardTransport.DeleteShardAsync(node, shard.DiskId, shard.RelativePath, cancellationToken);
             }
             catch
             {
             }
+        }
+
+        foreach (var disk in _disks)
+        {
+            DeleteFileQuietly(Path.Combine(disk.RootPath, manifestRelativePath));
+        }
+
+        foreach (var diskId in remoteDiskIds)
+        {
+            var node = await TryFindRemoteNodeForDiskAsync(diskId, cancellationToken);
+            if (node is null)
+            {
+                continue;
+            }
+
+            try
+            {
+                await _shardTransport.DeleteManifestAsync(node, diskId, manifestRelativePath, cancellationToken);
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    private static void DeleteDirectoryQuietly(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+        catch
+        {
         }
     }
 }

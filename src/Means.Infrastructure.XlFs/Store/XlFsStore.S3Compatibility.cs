@@ -161,7 +161,7 @@ public sealed partial class XlFsStore
                             && (!current.TryGetValue(record.Key, out var currentVersion) || currentVersion != record.VersionId))
                         {
                             await Db.PutBatchAsync([new LogDbMutation(Keys.Version(record.BucketName, record.Key, record.VersionId), null, true)], cancellationToken);
-                            DeleteObjectFilesQuietly(record);
+                            await DeleteObjectFilesQuietlyAsync(record, CancellationToken.None);
                             applied++;
                         }
                     }

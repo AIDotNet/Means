@@ -1,18 +1,17 @@
 using Means.Core;
-using Means.Infrastructure.SqliteFs;
+using Means.Infrastructure.XlFs;
 using Microsoft.Extensions.Options;
 
 namespace Means.Services;
 
 /// <summary>
 /// Runs low-priority storage maintenance that can move bytes without affecting foreground writes.
-/// Each pass keeps SQLite transactions short: file copies happen first, then manifest rows are
-/// swapped atomically.
+/// Each pass stages data first, then commits compact MeansLogDb mutations atomically.
 /// </summary>
 public sealed class StorageMaintenanceService : BackgroundService
 {
     private readonly IStorageMaintenanceOperations _store;
-    private readonly IOptions<SqliteFsOptions> _options;
+    private readonly IOptions<XlFsOptions> _options;
     private readonly IBackgroundTaskRegistry _backgroundTasks;
     private readonly ILogger<StorageMaintenanceService> _logger;
     private readonly BackgroundTaskDescriptor _ecRepairTask;
@@ -24,7 +23,7 @@ public sealed class StorageMaintenanceService : BackgroundService
 
     public StorageMaintenanceService(
         IStorageMaintenanceOperations store,
-        IOptions<SqliteFsOptions> options,
+        IOptions<XlFsOptions> options,
         IBackgroundTaskRegistry backgroundTasks,
         ILogger<StorageMaintenanceService> logger)
     {

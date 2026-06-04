@@ -104,22 +104,32 @@ public sealed partial class XlFsStore
         long replicaRecords = 0;
         long existingReplicaFiles = 0;
         long missingReplicaFiles = 0;
+        long missingReplicaObjects = 0;
         long underReplicated = 0;
+        long objectsWithoutReplicaManifest = 0;
         foreach (var record in objects)
         {
             var manifest = await TryReadManifestAsync(record, cancellationToken);
             if (manifest is null)
             {
+                missingReplicaObjects++;
                 underReplicated++;
+                objectsWithoutReplicaManifest++;
                 continue;
             }
 
+            if (await CountUnavailableManifestReplicasAsync(manifest, cancellationToken) > 0)
+            {
+                objectsWithoutReplicaManifest++;
+            }
+
             var objectExisting = 0;
+            var objectMissingFiles = 0;
             foreach (var shard in manifest.Parts.SelectMany(part => part.Shards))
             {
                 replicaRecords++;
-                var disk = _disks.FirstOrDefault(item => item.DiskId == shard.DiskId);
-                if (disk is not null && File.Exists(Path.Combine(disk.RootPath, shard.RelativePath)))
+                var probe = await ProbeShardAsync(shard, verifyChecksum: false, cancellationToken);
+                if (probe.Status == ShardProbeStatus.Available)
                 {
                     existingReplicaFiles++;
                     objectExisting++;
@@ -127,7 +137,13 @@ public sealed partial class XlFsStore
                 else
                 {
                     missingReplicaFiles++;
+                    objectMissingFiles++;
                 }
+            }
+
+            if (objectMissingFiles > 0)
+            {
+                missingReplicaObjects++;
             }
 
             if (objectExisting < WriteQuorum)
@@ -137,6 +153,19 @@ public sealed partial class XlFsStore
         }
 
         var healRows = await Db.ScanPrefixAsync(Keys.HealPrefix, 100_000, null, cancellationToken);
+        var generatedAt = DateTimeOffset.UtcNow;
+        var healRecords = new List<XlHealRecord>(healRows.Count);
+        foreach (var row in healRows)
+        {
+            try
+            {
+                healRecords.Add(DeserializeHealRecord(row.Value, generatedAt));
+            }
+            catch
+            {
+            }
+        }
+
         var diskCount = topology.Nodes.SelectMany(node => node.Disks).Count();
         var onlineDiskCount = topology.Nodes.SelectMany(node => node.Disks)
             .Count(disk => disk.Status == StorageDiskStatuses.Online);
@@ -145,7 +174,7 @@ public sealed partial class XlFsStore
         var bucketCount = (await ListBucketsAsync(cancellationToken)).Count;
         var ecProfiles = await ListErasureCodingProfilesAsync(cancellationToken);
         return new ClusterDiagnostics(
-            DateTimeOffset.UtcNow,
+            generatedAt,
             new ClusterDiagnosticsSummary(
                 bucketCount,
                 objects.LongLength,
@@ -162,30 +191,22 @@ public sealed partial class XlFsStore
                 Math.Max(0, totalCapacity - availableCapacity)),
             topology,
             new ObjectReplicaDiagnostics(
-                WriteQuorum,
+                Math.Max(1, _options.ReplicaCount),
                 objects.LongLength,
                 replicaRecords,
                 replicaRecords,
                 existingReplicaFiles,
                 missingReplicaFiles,
+                missingReplicaObjects,
                 underReplicated,
-                underReplicated,
-                0),
-            new ReplicaRepairQueueDiagnostics(
-                healRows.Count,
-                healRows.Count,
-                0,
-                0,
-                0,
-                0,
-                null,
-                healRows.Count == 0 ? null : DateTimeOffset.UtcNow,
-                [new ReplicaRepairQueueStatusDiagnostics("Pending", healRows.Count)]),
+                objectsWithoutReplicaManifest),
+            BuildRepairQueueDiagnostics(healRecords, generatedAt),
             new MetadataDiagnostics(0, 0),
             new ErasureCodingDiagnostics(
                 ecProfiles.Count,
                 ecProfiles.Count(profile => profile.Enabled),
                 ecProfiles.Count(profile => !profile.Enabled)),
+            new ClusterInternalTransportDiagnostics(false, 0),
             []);
     }
 
@@ -285,6 +306,7 @@ public sealed partial class XlFsStore
     {
         await EnsureInitializedAsync(cancellationToken);
         _ = SystemSettings.ValidateMaxUploadSizeBytes(settings.MaxUploadSizeBytes);
+        _ = SystemSettings.NormalizePublicOrigin(settings.PublicOrigin);
         await Db.PutJsonAsync(Keys.SystemSettings, settings, cancellationToken);
     }
 
@@ -360,6 +382,80 @@ public sealed partial class XlFsStore
         return rows.Select(row => Deserialize<XlRequestMetricAggregate>(row.Value))
             .Where(metric => metric.HourUtc >= start && metric.HourUtc < end)
             .ToArray();
+    }
+
+    private ReplicaRepairQueueDiagnostics BuildRepairQueueDiagnostics(
+        IReadOnlyList<XlHealRecord> records,
+        DateTimeOffset generatedAt)
+    {
+        var statusCounts = records
+            .GroupBy(record => RepairQueueStatusForDiagnostics(record, generatedAt), StringComparer.Ordinal)
+            .Select(group => new ReplicaRepairQueueStatusDiagnostics(group.Key, group.LongCount()))
+            .OrderBy(item => item.Status, StringComparer.Ordinal)
+            .ToArray();
+        var failed = records.LongCount(IsFailedRepairRecord);
+        var pending = records.LongCount(record => !IsFailedRepairRecord(record));
+        var retryableFailed = records.LongCount(record =>
+            record.AttemptCount > 0
+            && !IsFailedRepairRecord(record));
+        var activeRecords = records.Where(record => !IsFailedRepairRecord(record)).ToArray();
+        var items = records
+            .OrderByDescending(record => RepairQueueItemPriority(record, generatedAt))
+            .ThenBy(record => record.NextAttemptAt ?? record.QueuedAt)
+            .ThenBy(record => record.QueuedAt)
+            .Take(25)
+            .Select(record => new ReplicaRepairQueueItemDiagnostics(
+                record.BucketName,
+                record.Key,
+                record.ObjectId,
+                record.Reason,
+                RepairQueueStatusForDiagnostics(record, generatedAt),
+                record.AttemptCount,
+                record.QueuedAt,
+                record.UpdatedAt,
+                record.LastAttemptAt,
+                record.NextAttemptAt,
+                record.LastError))
+            .ToArray();
+        return new ReplicaRepairQueueDiagnostics(
+            records.Count,
+            pending,
+            0,
+            failed,
+            retryableFailed,
+            records.LongCount(record => record.AttemptCount >= MaxRepairAttempts),
+            activeRecords.Length == 0 ? null : activeRecords.Min(record => record.QueuedAt),
+            records.Count == 0 ? null : records.Max(record => record.UpdatedAt),
+            statusCounts,
+            items);
+    }
+
+    private int RepairQueueItemPriority(XlHealRecord record, DateTimeOffset generatedAt)
+    {
+        if (IsFailedRepairRecord(record))
+        {
+            return 3;
+        }
+
+        return record.NextAttemptAt is { } nextAttemptAt && nextAttemptAt > generatedAt ? 2 : 1;
+    }
+
+    private string RepairQueueStatusForDiagnostics(XlHealRecord record, DateTimeOffset generatedAt)
+    {
+        if (IsFailedRepairRecord(record))
+        {
+            return HealStatuses.Failed;
+        }
+
+        return record.NextAttemptAt is { } nextAttemptAt && nextAttemptAt > generatedAt
+            ? HealStatuses.RetryScheduled
+            : HealStatuses.Pending;
+    }
+
+    private bool IsFailedRepairRecord(XlHealRecord record)
+    {
+        return record.AttemptCount >= MaxRepairAttempts
+            || string.Equals(record.Status, HealStatuses.Failed, StringComparison.Ordinal);
     }
 
     private static string RandomHex(int bytes)

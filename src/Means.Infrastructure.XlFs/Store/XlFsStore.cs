@@ -11,6 +11,7 @@ public sealed partial class XlFsStore : IObjectStore,
     IBucketPolicyRepository,
     IConsoleStore,
     IClusterStore,
+    IClusterShardStore,
     IErasureCodingProfileStore,
     IMetadataMaintenanceStore,
     IStorageMaintenanceOperations,
@@ -19,6 +20,8 @@ public sealed partial class XlFsStore : IObjectStore,
     private const int FormatVersion = 1;
     private const long MinimumMultipartPartSize = 5L * 1024 * 1024;
     private readonly XlFsOptions _options;
+    private readonly IObjectPlacementPlanner _placementPlanner;
+    private readonly IClusterShardTransport _shardTransport;
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private bool _initialized;
     private MeansLogDb? _db;
@@ -26,10 +29,19 @@ public sealed partial class XlFsStore : IObjectStore,
     private long _auditId;
 
     public XlFsStore(IOptions<XlFsOptions> options)
+        : this(options, new DeterministicObjectPlacementPlanner(), NoopClusterShardTransport.Instance)
+    {
+    }
+
+    public XlFsStore(
+        IOptions<XlFsOptions> options,
+        IObjectPlacementPlanner placementPlanner,
+        IClusterShardTransport shardTransport)
     {
         _options = options.Value;
         _options.ObjectsPath = ResolvePath(_options.ObjectsPath);
-        _options.DatabasePath = ResolvePath(_options.DatabasePath);
+        _placementPlanner = placementPlanner;
+        _shardTransport = shardTransport;
     }
 
     public async ValueTask DisposeAsync()
@@ -58,15 +70,6 @@ public sealed partial class XlFsStore : IObjectStore,
             }
 
             var roots = _options.Disks.Length == 0 ? [_options.ObjectsPath] : _options.Disks.Select(ResolvePath).ToArray();
-            if (!_options.AllowNewFormatWithExistingSqlite
-                && File.Exists(_options.DatabasePath)
-                && roots.All(root => !File.Exists(Path.Combine(root, ".means.sys", "format.json"))))
-            {
-                throw new InvalidOperationException(
-                    "XlFs detected an existing SQLite metadata file but no XlFs disk format. "
-                    + "Automatic SQLite migration is not supported; export/import manually or set Means:Storage:AllowNewFormatWithExistingSqlite=true to intentionally start a new XlFs namespace.");
-            }
-
             var deploymentId = string.IsNullOrWhiteSpace(_options.DeploymentId) ? "local-xlfs" : _options.DeploymentId.Trim();
             var disks = new List<XlDisk>();
             for (var index = 0; index < roots.Length; index++)
@@ -175,14 +178,152 @@ public sealed partial class XlFsStore : IObjectStore,
 
     private async Task QueueHealAsync(ObjectInfo info, string reason, CancellationToken cancellationToken)
     {
-        await Db.PutJsonAsync(Keys.Heal(info.ObjectId), new Dictionary<string, string>
+        var key = Keys.Heal(info.ObjectId);
+        var now = DateTimeOffset.UtcNow;
+        var existingBytes = await Db.GetAsync(key, cancellationToken);
+        var existing = existingBytes is null ? null : DeserializeHealRecord(existingBytes, now);
+        var maxAttemptsReached = existing is not null && existing.AttemptCount >= MaxRepairAttempts;
+        var status = maxAttemptsReached
+            ? HealStatuses.Failed
+            : string.Equals(existing?.Status, HealStatuses.RetryScheduled, StringComparison.Ordinal)
+                ? HealStatuses.RetryScheduled
+                : HealStatuses.Pending;
+        var record = new XlHealRecord(
+            info.BucketName,
+            info.Key,
+            info.ObjectId,
+            reason,
+            status,
+            existing?.AttemptCount ?? 0,
+            existing?.QueuedAt ?? now,
+            now,
+            existing?.LastAttemptAt,
+            status == HealStatuses.RetryScheduled ? existing?.NextAttemptAt : null,
+            existing?.LastError);
+        await Db.PutJsonAsync(key, record, cancellationToken);
+    }
+
+    private int MaxRepairAttempts => Math.Max(1, _options.ReplicaRepairMaxAttempts);
+
+    private int MaxRepairConcurrency => Math.Clamp(_options.ReplicaRepairMaxConcurrency, 1, 32);
+
+    private TimeSpan RepairThrottleDelay => TimeSpan.FromMilliseconds(Math.Clamp(_options.ReplicaRepairThrottleDelayMilliseconds, 0, 60_000));
+
+    private static XlHealRecord DeserializeHealRecord(byte[] value, DateTimeOffset fallbackTimestamp)
+    {
+        using var document = JsonDocument.Parse(value);
+        var root = document.RootElement;
+        var bucket = GetJsonString(root, "BucketName", "bucketName", "bucket") ?? string.Empty;
+        var key = GetJsonString(root, "Key", "key") ?? string.Empty;
+        var objectId = GetJsonString(root, "ObjectId", "objectId") ?? string.Empty;
+        var reason = GetJsonString(root, "Reason", "reason") ?? "Unspecified";
+        var attemptCount = Math.Max(0, GetJsonInt(root, "AttemptCount", "attemptCount", "attempts") ?? 0);
+        return new XlHealRecord(
+            bucket,
+            key,
+            objectId,
+            reason,
+            NormalizeHealStatus(GetJsonString(root, "Status", "status"), attemptCount),
+            attemptCount,
+            GetJsonDateTime(root, fallbackTimestamp, "QueuedAt", "queuedAt"),
+            GetJsonDateTime(root, fallbackTimestamp, "UpdatedAt", "updatedAt"),
+            GetJsonNullableDateTime(root, "LastAttemptAt", "lastAttemptAt"),
+            GetJsonNullableDateTime(root, "NextAttemptAt", "nextAttemptAt"),
+            TruncateHealError(GetJsonString(root, "LastError", "lastError")));
+    }
+
+    private static string NormalizeHealStatus(string? status, int attemptCount)
+    {
+        if (string.Equals(status, HealStatuses.Failed, StringComparison.OrdinalIgnoreCase))
         {
-            ["bucket"] = info.BucketName,
-            ["key"] = info.Key,
-            ["objectId"] = info.ObjectId,
-            ["reason"] = reason,
-            ["queuedAt"] = DateTimeOffset.UtcNow.ToString("O")
-        }, cancellationToken);
+            return HealStatuses.Failed;
+        }
+
+        if (string.Equals(status, HealStatuses.RetryScheduled, StringComparison.OrdinalIgnoreCase))
+        {
+            return HealStatuses.RetryScheduled;
+        }
+
+        return attemptCount > 0 && !string.IsNullOrWhiteSpace(status)
+            ? HealStatuses.RetryScheduled
+            : HealStatuses.Pending;
+    }
+
+    private static string? GetJsonString(JsonElement element, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String)
+            {
+                return value.GetString();
+            }
+        }
+
+        return null;
+    }
+
+    private static int? GetJsonInt(JsonElement element, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!element.TryGetProperty(name, out var value))
+            {
+                continue;
+            }
+
+            if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number))
+            {
+                return number;
+            }
+
+            if (value.ValueKind == JsonValueKind.String
+                && int.TryParse(value.GetString(), out number))
+            {
+                return number;
+            }
+        }
+
+        return null;
+    }
+
+    private static DateTimeOffset GetJsonDateTime(
+        JsonElement element,
+        DateTimeOffset fallback,
+        params string[] names)
+    {
+        return GetJsonNullableDateTime(element, names) ?? fallback;
+    }
+
+    private static DateTimeOffset? GetJsonNullableDateTime(JsonElement element, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (element.TryGetProperty(name, out var value)
+                && value.ValueKind == JsonValueKind.String
+                && DateTimeOffset.TryParse(value.GetString(), out var parsed))
+            {
+                return parsed.ToUniversalTime();
+            }
+        }
+
+        return null;
+    }
+
+    private static string? TruncateHealError(string? error)
+    {
+        if (string.IsNullOrWhiteSpace(error))
+        {
+            return null;
+        }
+
+        return error.Length <= 512 ? error : error[..512];
+    }
+
+    private static class HealStatuses
+    {
+        public const string Pending = "Pending";
+        public const string RetryScheduled = "RetryScheduled";
+        public const string Failed = "Failed";
     }
 
     private static ObjectInfo ToObjectInfo(XlObjectRecord record)
@@ -314,4 +455,94 @@ public sealed partial class XlFsStore : IObjectStore,
     }
 
     private sealed record XlDisk(string DiskId, string RootPath, int SetIndex, bool Online, long TotalBytes, long AvailableBytes);
+
+    private sealed class NoopClusterShardTransport : IClusterShardTransport
+    {
+        public static readonly NoopClusterShardTransport Instance = new();
+
+        public bool Enabled => false;
+
+        public Task<ClusterShardWriteResult> WriteShardAsync(
+            ClusterNodeInfo node,
+            string diskId,
+            string relativePath,
+            Stream content,
+            long expectedLength,
+            string expectedChecksumSha256,
+            CancellationToken cancellationToken)
+        {
+            throw NotConfigured();
+        }
+
+        public Task<ClusterShardReadResult> OpenShardAsync(
+            ClusterNodeInfo node,
+            string diskId,
+            string relativePath,
+            CancellationToken cancellationToken)
+        {
+            throw NotConfigured();
+        }
+
+        public Task<ClusterShardStatResult> StatShardAsync(
+            ClusterNodeInfo node,
+            string diskId,
+            string relativePath,
+            CancellationToken cancellationToken)
+        {
+            throw NotConfigured();
+        }
+
+        public Task<bool> DeleteShardAsync(
+            ClusterNodeInfo node,
+            string diskId,
+            string relativePath,
+            CancellationToken cancellationToken)
+        {
+            throw NotConfigured();
+        }
+
+        public Task<ClusterShardWriteResult> WriteManifestAsync(
+            ClusterNodeInfo node,
+            string diskId,
+            string relativePath,
+            Stream content,
+            long expectedLength,
+            string expectedChecksumSha256,
+            CancellationToken cancellationToken)
+        {
+            throw NotConfigured();
+        }
+
+        public Task<ClusterShardReadResult> OpenManifestAsync(
+            ClusterNodeInfo node,
+            string diskId,
+            string relativePath,
+            CancellationToken cancellationToken)
+        {
+            throw NotConfigured();
+        }
+
+        public Task<ClusterShardStatResult> StatManifestAsync(
+            ClusterNodeInfo node,
+            string diskId,
+            string relativePath,
+            CancellationToken cancellationToken)
+        {
+            throw NotConfigured();
+        }
+
+        public Task<bool> DeleteManifestAsync(
+            ClusterNodeInfo node,
+            string diskId,
+            string relativePath,
+            CancellationToken cancellationToken)
+        {
+            throw NotConfigured();
+        }
+
+        private static MeansException NotConfigured()
+        {
+            return new MeansException(MeansErrorCodes.InvalidRequest, "Cluster shard transport is not configured.", 503);
+        }
+    }
 }

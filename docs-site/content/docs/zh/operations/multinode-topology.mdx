@@ -23,6 +23,8 @@ http://localhost:5183  means-node3
 
 每个节点仍拥有独立 XlFs 命名空间。在分布式 metadata/RPC 完成前，不要把 S3 数据面流量通过负载均衡器打到这些节点。
 
+内部 shard RPC 端点已预留给后续跨节点 EC placement、repair 和 rebalance 使用。启用时必须为所有节点设置相同的 `Means:Cluster:InternalAuthToken`，并根据网络和磁盘带宽设置 `Means:Cluster:MaxShardTransferBytes`。
+
 ## 适合验证
 
 - Console 集群页面。

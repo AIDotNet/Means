@@ -624,9 +624,13 @@ public sealed class S3EndpointTests
             {
                 configuration.AddInMemoryCollection(new Dictionary<string, string?>
                 {
-                    ["Means:Storage:Backend"] = "SqliteFs",
-                    ["Means:Storage:DatabasePath"] = Path.Combine(_root, "means.db"),
                     ["Means:Storage:ObjectsPath"] = Path.Combine(_root, "objects"),
+                    ["Means:Storage:Disks:0"] = Path.Combine(_root, "disk1"),
+                    ["Means:Storage:Disks:1"] = Path.Combine(_root, "disk2"),
+                    ["Means:Storage:Disks:2"] = Path.Combine(_root, "disk3"),
+                    ["Means:Storage:Disks:3"] = Path.Combine(_root, "disk4"),
+                    ["Means:Storage:DeploymentId"] = "s3-test-" + Guid.NewGuid().ToString("N"),
+                    ["Means:Storage:SetId"] = "set-1",
                     ["Means:Storage:DefaultAccessKey"] = "meansadmin",
                     ["Means:Storage:DefaultSecretKey"] = "meansadminsecret",
                     ["Means:S3:ServiceHost"] = "api.means.local",

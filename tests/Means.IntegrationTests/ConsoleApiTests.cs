@@ -180,6 +180,87 @@ public sealed class ConsoleApiTests
     }
 
     [Fact]
+    public async Task ConsolePresignedDownloadUsesForwardedOrigin()
+    {
+        await using var factory = new MeansWebApplicationFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("http://internal.local")
+        });
+
+        var credentials = new SigV4SigningCredentials("meansadmin", "meansadminsecret");
+        using var createBucket = new HttpRequestMessage(HttpMethod.Put, "http://internal.local/s3/forwarded-bucket");
+        SigV4RequestSigner.Sign(createBucket, credentials);
+        Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(createBucket)).StatusCode);
+
+        using var putObject = new HttpRequestMessage(HttpMethod.Put, "http://internal.local/s3/forwarded-bucket/file.txt")
+        {
+            Content = new StringContent("through proxy", Encoding.UTF8, "text/plain")
+        };
+        SigV4RequestSigner.Sign(putObject, credentials);
+        Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(putObject)).StatusCode);
+
+        var login = await client.PostAsJsonAsync("/api/console/auth/login", new LoginRequest("admin", "meansadmin"));
+        Assert.Equal(HttpStatusCode.OK, login.StatusCode);
+
+        using var presignRequest = new HttpRequestMessage(HttpMethod.Post, "/api/console/buckets/forwarded-bucket/objects/presign-download")
+        {
+            Content = JsonContent.Create(new PresignRequest("file.txt", 900), options: JsonOptions)
+        };
+        presignRequest.Headers.TryAddWithoutValidation("X-Forwarded-Host", "means.asia");
+        presignRequest.Headers.TryAddWithoutValidation("X-Forwarded-Proto", "https");
+        var presign = await client.SendAsync(presignRequest);
+        Assert.Equal(HttpStatusCode.OK, presign.StatusCode);
+        var transfer = await ReadJsonAsync<PresignedTransferResponse>(presign);
+
+        var download = await client.GetAsync(new Uri(new Uri("https://means.asia"), transfer.Url));
+        Assert.Equal(HttpStatusCode.OK, download.StatusCode);
+        Assert.Equal("through proxy", await download.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task ConsolePresignedDownloadUsesBoundPublicOrigin()
+    {
+        await using var factory = new MeansWebApplicationFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("http://internal.local")
+        });
+
+        var credentials = new SigV4SigningCredentials("meansadmin", "meansadminsecret");
+        using var createBucket = new HttpRequestMessage(HttpMethod.Put, "http://internal.local/s3/bound-origin-bucket");
+        SigV4RequestSigner.Sign(createBucket, credentials);
+        Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(createBucket)).StatusCode);
+
+        using var putObject = new HttpRequestMessage(HttpMethod.Put, "http://internal.local/s3/bound-origin-bucket/file.txt")
+        {
+            Content = new StringContent("bound origin", Encoding.UTF8, "text/plain")
+        };
+        SigV4RequestSigner.Sign(putObject, credentials);
+        Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(putObject)).StatusCode);
+
+        var login = await client.PostAsJsonAsync("/api/console/auth/login", new LoginRequest("admin", "meansadmin"));
+        Assert.Equal(HttpStatusCode.OK, login.StatusCode);
+
+        var settings = await client.PutAsJsonAsync(
+            "/api/console/settings",
+            new UpdateSystemSettingsRequest(64 * 1024 * 1024, "means.asia"));
+        Assert.Equal(HttpStatusCode.OK, settings.StatusCode);
+        Assert.Equal("https://means.asia", (await ReadJsonAsync<SystemSettingsResponse>(settings)).PublicOrigin);
+
+        var presign = await client.PostAsJsonAsync(
+            "/api/console/buckets/bound-origin-bucket/objects/presign-download",
+            new PresignRequest("file.txt", 900));
+        Assert.Equal(HttpStatusCode.OK, presign.StatusCode);
+        var transfer = await ReadJsonAsync<PresignedTransferResponse>(presign);
+        Assert.StartsWith("https://means.asia/s3/bound-origin-bucket/file.txt?", transfer.Url, StringComparison.Ordinal);
+
+        var download = await client.GetAsync(transfer.Url);
+        Assert.Equal(HttpStatusCode.OK, download.StatusCode);
+        Assert.Equal("bound origin", await download.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
     public async Task ConsoleWorkflowUsesCookieAuthAndSameOriginPresignedTransfers()
     {
         await using var factory = new MeansWebApplicationFactory();
@@ -459,12 +540,13 @@ public sealed class ConsoleApiTests
         Assert.Equal("test-node", nodes[0].GetProperty("nodeId").GetString());
         Assert.Equal("Online", nodes[0].GetProperty("status").GetString());
         var disks = nodes[0].GetProperty("disks").EnumerateArray().ToArray();
-        Assert.Single(disks);
-        Assert.Equal("test-objects", disks[0].GetProperty("diskId").GetString());
-        Assert.True(disks[0].GetProperty("totalBytes").GetInt64() > 0);
+        Assert.Equal(4, disks.Length);
+        Assert.Equal(["disk-00", "disk-01", "disk-02", "disk-03"], disks.Select(disk => disk.GetProperty("diskId").GetString() ?? "").Order(StringComparer.Ordinal).ToArray());
+        Assert.All(disks, disk => Assert.True(disk.GetProperty("totalBytes").GetInt64() > 0));
         var pools = clusterRoot.GetProperty("pools").EnumerateArray().ToArray();
         Assert.Single(pools);
         Assert.Equal("Test Pool", pools[0].GetProperty("name").GetString());
+        Assert.Equal(4, pools[0].GetProperty("diskCount").GetInt32());
 
         var invalidEcProfile = await client.PutAsJsonAsync(
             "/api/console/ec-profiles/ec-bad",
@@ -508,12 +590,16 @@ public sealed class ConsoleApiTests
         var repairQueue = diagnosticsRoot.GetProperty("repairQueue");
         Assert.Equal(0, repairQueue.GetProperty("pendingCount").GetInt64());
         Assert.Equal(0, repairQueue.GetProperty("failedCount").GetInt64());
+        Assert.Empty(repairQueue.GetProperty("items").EnumerateArray());
         var metadataDiagnostics = diagnosticsRoot.GetProperty("metadata");
         Assert.Equal(0, metadataDiagnostics.GetProperty("pendingCommitCount").GetInt64());
         Assert.Equal(0, metadataDiagnostics.GetProperty("orphanedReplicaRecordCount").GetInt64());
         var ecDiagnostics = diagnosticsRoot.GetProperty("erasureCoding");
         Assert.Equal(1, ecDiagnostics.GetProperty("profileCount").GetInt64());
         Assert.Equal(1, ecDiagnostics.GetProperty("enabledProfileCount").GetInt64());
+        var internalTransport = diagnosticsRoot.GetProperty("internalTransport");
+        Assert.True(internalTransport.GetProperty("shardRpcEnabled").GetBoolean());
+        Assert.Equal(1024 * 1024, internalTransport.GetProperty("maxShardTransferBytes").GetInt64());
         var backgroundTasks = diagnosticsRoot.GetProperty("backgroundTasks").EnumerateArray().ToArray();
         Assert.Contains(backgroundTasks, task => task.GetProperty("taskId").GetString() == "cluster-heartbeat");
         Assert.Contains(backgroundTasks, task => task.GetProperty("taskId").GetString() == "disk-health-isolation");
@@ -693,9 +779,13 @@ public sealed class ConsoleApiTests
             {
                 var values = new Dictionary<string, string?>
                 {
-                    ["Means:Storage:Backend"] = "SqliteFs",
-                    ["Means:Storage:DatabasePath"] = Path.Combine(_root, "means.db"),
                     ["Means:Storage:ObjectsPath"] = Path.Combine(_root, "objects"),
+                    ["Means:Storage:Disks:0"] = Path.Combine(_root, "disk1"),
+                    ["Means:Storage:Disks:1"] = Path.Combine(_root, "disk2"),
+                    ["Means:Storage:Disks:2"] = Path.Combine(_root, "disk3"),
+                    ["Means:Storage:Disks:3"] = Path.Combine(_root, "disk4"),
+                    ["Means:Storage:DeploymentId"] = "console-test-" + Guid.NewGuid().ToString("N"),
+                    ["Means:Storage:SetId"] = "set-1",
                     ["Means:Storage:DefaultAccessKey"] = "meansadmin",
                     ["Means:Storage:DefaultSecretKey"] = "meansadminsecret",
                     ["Means:S3:ServiceHost"] = "api.means.local",
@@ -711,6 +801,8 @@ public sealed class ConsoleApiTests
                     ["Means:Cluster:ObjectDiskId"] = "test-objects",
                     ["Means:Cluster:HeartbeatIntervalSeconds"] = "5",
                     ["Means:Cluster:OfflineAfterSeconds"] = "60",
+                    ["Means:Cluster:InternalAuthToken"] = "cluster-secret",
+                    ["Means:Cluster:MaxShardTransferBytes"] = (1024 * 1024).ToString(),
                     ["Means:RequestLimits:MaxConcurrentUploadRequests"] = "1"
                 };
                 foreach (var item in _overrides)
@@ -805,9 +897,13 @@ public sealed class ConsoleApiTests
 
     private sealed record ConsoleErrorResponse(string Code, string Message, int StatusCode);
 
-    private sealed record UpdateSystemSettingsRequest(long MaxUploadSizeBytes);
+    private sealed record UpdateSystemSettingsRequest(long MaxUploadSizeBytes, string? PublicOrigin = null);
 
-    private sealed record SystemSettingsResponse(long MaxUploadSizeBytes, long MinimumMaxUploadSizeBytes, long MaximumMaxUploadSizeBytes);
+    private sealed record SystemSettingsResponse(
+        long MaxUploadSizeBytes,
+        long MinimumMaxUploadSizeBytes,
+        long MaximumMaxUploadSizeBytes,
+        string? PublicOrigin);
 
     private sealed record SaveErasureCodingProfileRequest(int DataShards, int ParityShards, int CellSizeBytes, bool Enabled);
 

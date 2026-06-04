@@ -15,6 +15,7 @@ public sealed partial class MeansLogDb : IAsyncDisposable
     private readonly string _walPath;
     private readonly string _syncMode;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
+    private readonly ReaderWriterLockSlim _indexLock = new(LockRecursionPolicy.NoRecursion);
     private readonly Dictionary<string, byte[]> _items = new(StringComparer.Ordinal);
     private readonly SortedSet<string> _orderedKeys = new(StringComparer.Ordinal);
     private FileStream? _wal;
@@ -42,6 +43,7 @@ public sealed partial class MeansLogDb : IAsyncDisposable
     public ValueTask DisposeAsync()
     {
         _wal?.Dispose();
+        _indexLock.Dispose();
         _writeLock.Dispose();
         return ValueTask.CompletedTask;
     }
@@ -49,9 +51,14 @@ public sealed partial class MeansLogDb : IAsyncDisposable
     public Task<byte[]?> GetAsync(string key, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        lock (_items)
+        _indexLock.EnterReadLock();
+        try
         {
             return Task.FromResult(_items.TryGetValue(key, out var value) ? value.ToArray() : null);
+        }
+        finally
+        {
+            _indexLock.ExitReadLock();
         }
     }
 
@@ -59,9 +66,14 @@ public sealed partial class MeansLogDb : IAsyncDisposable
     {
         cancellationToken.ThrowIfCancellationRequested();
         byte[]? bytes;
-        lock (_items)
+        _indexLock.EnterReadLock();
+        try
         {
             _items.TryGetValue(key, out bytes);
+        }
+        finally
+        {
+            _indexLock.ExitReadLock();
         }
 
         return Task.FromResult(bytes is null ? default : JsonSerializer.Deserialize(bytes, XlJson.TypeInfo<T>()));
@@ -99,9 +111,14 @@ public sealed partial class MeansLogDb : IAsyncDisposable
                 await _wal.FlushAsync(cancellationToken);
             }
 
-            lock (_items)
+            _indexLock.EnterWriteLock();
+            try
             {
                 Apply(mutations);
+            }
+            finally
+            {
+                _indexLock.ExitWriteLock();
             }
         }
         finally
@@ -114,7 +131,8 @@ public sealed partial class MeansLogDb : IAsyncDisposable
     {
         cancellationToken.ThrowIfCancellationRequested();
         var boundedLimit = Math.Clamp(limit, 1, 100_000);
-        lock (_items)
+        _indexLock.EnterReadLock();
+        try
         {
             var results = new List<KeyValuePair<string, byte[]>>(Math.Min(boundedLimit, 1024));
             var startKey = afterKey is not null && string.CompareOrdinal(afterKey, prefix) > 0 ? afterKey : prefix;
@@ -149,6 +167,10 @@ public sealed partial class MeansLogDb : IAsyncDisposable
 
             return Task.FromResult<IReadOnlyList<KeyValuePair<string, byte[]>>>(results);
         }
+        finally
+        {
+            _indexLock.ExitReadLock();
+        }
     }
 
     public async Task<MetadataSnapshotInfo> CreateSnapshotAsync(string snapshotPath, CancellationToken cancellationToken)
@@ -161,11 +183,16 @@ public sealed partial class MeansLogDb : IAsyncDisposable
             await using (var output = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None, 128 * 1024, FileOptions.Asynchronous))
             {
                 List<LogDbRecord> records;
-                lock (_items)
+                _indexLock.EnterReadLock();
+                try
                 {
                     records = _orderedKeys
                         .Select(key => new LogDbRecord(key, false, Convert.ToBase64String(_items[key])))
                         .ToList();
+                }
+                finally
+                {
+                    _indexLock.ExitReadLock();
                 }
 
                 await JsonSerializer.SerializeAsync(output, records, LogDbJsonTypeInfo<List<LogDbRecord>>(), cancellationToken);
@@ -188,7 +215,8 @@ public sealed partial class MeansLogDb : IAsyncDisposable
         {
             await using var input = new FileStream(snapshotPath, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, FileOptions.Asynchronous);
             var records = await JsonSerializer.DeserializeAsync(input, LogDbJsonTypeInfo<List<LogDbRecord>>(), cancellationToken) ?? [];
-            lock (_items)
+            _indexLock.EnterWriteLock();
+            try
             {
                 _items.Clear();
                 _orderedKeys.Clear();
@@ -198,6 +226,10 @@ public sealed partial class MeansLogDb : IAsyncDisposable
                     _orderedKeys.Add(record.Key);
                 }
 
+            }
+            finally
+            {
+                _indexLock.ExitWriteLock();
             }
 
             _wal?.Dispose();

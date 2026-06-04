@@ -8,6 +8,7 @@ public sealed record ClusterDiagnostics(
     ReplicaRepairQueueDiagnostics RepairQueue,
     MetadataDiagnostics Metadata,
     ErasureCodingDiagnostics ErasureCoding,
+    ClusterInternalTransportDiagnostics InternalTransport,
     IReadOnlyList<BackgroundTaskSnapshot> BackgroundTasks);
 
 public sealed record ClusterDiagnosticsSummary(
@@ -45,9 +46,23 @@ public sealed record ReplicaRepairQueueDiagnostics(
     long MaxAttemptsReachedCount,
     DateTimeOffset? OldestPendingAt,
     DateTimeOffset? LastUpdatedAt,
-    IReadOnlyList<ReplicaRepairQueueStatusDiagnostics> Statuses);
+    IReadOnlyList<ReplicaRepairQueueStatusDiagnostics> Statuses,
+    IReadOnlyList<ReplicaRepairQueueItemDiagnostics> Items);
 
 public sealed record ReplicaRepairQueueStatusDiagnostics(string Status, long Count);
+
+public sealed record ReplicaRepairQueueItemDiagnostics(
+    string BucketName,
+    string Key,
+    string ObjectId,
+    string Reason,
+    string Status,
+    int AttemptCount,
+    DateTimeOffset QueuedAt,
+    DateTimeOffset UpdatedAt,
+    DateTimeOffset? LastAttemptAt,
+    DateTimeOffset? NextAttemptAt,
+    string? LastError);
 
 public sealed record MetadataDiagnostics(
     long PendingCommitCount,
@@ -57,3 +72,7 @@ public sealed record ErasureCodingDiagnostics(
     long ProfileCount,
     long EnabledProfileCount,
     long DisabledProfileCount);
+
+public sealed record ClusterInternalTransportDiagnostics(
+    bool ShardRpcEnabled,
+    long MaxShardTransferBytes);

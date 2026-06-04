@@ -11,10 +11,13 @@ This page prevents experimental or reserved interfaces from being mistaken for p
 - Object Lock / Retention.
 - Full IAM / STS.
 - Distributed data sharding and true cross-node erasure coding.
+- Multipart EC, cross-node EC/RPC, and production-grade EC repair/rebalance.
 
 ## Reserved but Incomplete
 
 Bucket notification currently persists and reads configuration. Event delivery workers are not implemented yet.
+
+XlFs plain `PutObject` now supports local object-level Reed-Solomon data/parity shards and read reconstruction when a data shard is missing. This is not a complete multi-node distributed data plane.
 
 ## Multi-node Compose
 

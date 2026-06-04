@@ -45,7 +45,11 @@
       "mainNav": "主导航"
     },
     "badges": {
-      "singleNode": "单节点"
+      "singleNode": "单节点",
+      "xlfs": "XlFs"
+    },
+    "breadcrumbs": {
+      "root": "控制台"
     },
     "nav": {
       "accessKeys": "访问密钥",
@@ -56,9 +60,20 @@
       "cluster": "集群",
       "health": "健康"
     },
+    "product": {
+      "subtitle": "对象存储控制台"
+    },
     "search": {
       "open": "打开搜索",
-      "placeholder": "搜索页面、桶或操作"
+      "placeholder": "搜索页面、桶或操作",
+      "shortLabel": "搜索",
+      "shortcut": "Ctrl K"
+    },
+    "sections": {
+      "distributed": "分布式",
+      "governance": "治理",
+      "overview": "概览",
+      "storage": "存储"
     },
     "userMenu": {
       "currentUser": "当前用户",
@@ -465,6 +480,7 @@
   },
   "settings": {
     "errors": {
+      "invalidPublicOrigin": "请输入有效的 http(s) 访问域名",
       "invalidUploadLimit": "请输入有效的上传上限",
       "rangeLimit": "可配置范围是 {{min}} - {{max}}",
       "saveFailed": "保存失败"
@@ -476,7 +492,7 @@
     },
     "sections": {
       "architecture": {
-        "currentMode": "当前运行模式是单站点 SQLite + filesystem baseline。",
+        "currentMode": "当前运行模式是 XlFs + 自研 MeansLogDb 元数据引擎。",
         "futureAbstraction": "server pool、erasure set、healing/scrub 是后续分布式演进抽象。",
         "title": "架构预留"
       },
@@ -488,12 +504,14 @@
         "title": "压缩与缓存"
       },
       "endpoints": {
+        "boundAlias": "绑定 /s3 Endpoint",
         "consoleAlias": "Console /s3 Alias",
+        "publicOrigin": "外部访问域名",
         "title": "访问地址"
       },
       "localStorage": {
         "objectBlobs": "Object Blobs",
-        "sqliteMetadata": "SQLite Metadata",
+        "metadataStore": "LogDb Metadata",
         "title": "本地存储",
         "version": "Version"
       },
@@ -576,6 +594,70 @@
       "disks": "{{online}} 块磁盘在线 / {{offline}} 块离线",
       "available": "可用 {{value}}",
       "taskHealth": "{{running}} 运行中 / {{failed}} 失败"
+    },
+    "readiness": {
+      "title": "分布式就绪度",
+      "loading": "正在加载分布式就绪度...",
+      "generated": "更新于 {{value}}",
+      "states": {
+        "ready": "就绪",
+        "configured": "已配置",
+        "partial": "基础能力",
+        "pending": "待完成",
+        "attention": "需关注",
+        "disabled": "关闭"
+      },
+      "topology": {
+        "title": "拓扑",
+        "detail": "{{nodes}} 个节点和 {{disks}} 块磁盘在线",
+        "degraded": "{{nodes}} 个节点和 {{disks}} 块磁盘离线"
+      },
+      "transport": {
+        "title": "Shard RPC",
+        "enabled": "内部 shard 端点已配置，单次传输上限 {{limit}}",
+        "disabled": "配置内部集群 token 后才能接收 shard 传输"
+      },
+      "erasureCoding": {
+        "title": "EC 分片",
+        "enabled": "{{count}} 个 EC profile 已启用；当前对象分片仍在本地",
+        "disabled": "写入纠删码对象前需要先创建 EC profile"
+      },
+      "repair": {
+        "title": "修复",
+        "detail": "{{tasks}} 个维护任务，{{pending}} 个待修复项"
+      },
+      "routing": {
+        "title": "入口",
+        "detail": "S3 负载均衡需等待分布式元数据和放置策略完成"
+      }
+    },
+    "transport": {
+      "title": "数据面传输",
+      "loading": "正在加载传输诊断...",
+      "value": "运行时",
+      "shardRpc": "Shard RPC",
+      "enabled": "已启用",
+      "disabled": "已关闭",
+      "maxTransfer": "最大 shard 传输 {{value}}",
+      "erasureCoding": "纠删码",
+      "ecProfiles": "{{enabled}} / {{total}} 已启用",
+      "ecDetail": "当前写入使用本地 XlFs 磁盘上的 Reed-Solomon 分片。",
+      "repair": "修复与均衡",
+      "repairQueue": "{{pending}} 待处理 / {{failed}} 失败",
+      "taskHealth": "{{running}} 运行中 / {{failed}} 失败任务",
+      "routing": "S3 路由",
+      "pending": "待完成",
+      "routingDetail": "放置策略具备跨节点感知前，不要启用生产负载均衡。"
+    },
+    "topologyMap": {
+      "title": "拓扑图",
+      "loading": "正在加载拓扑...",
+      "empty": "暂无已注册拓扑",
+      "value": "{{pools}} 个存储池 / {{nodes}} 个节点",
+      "poolMeta": "{{nodes}} 个节点 / {{disks}} 块磁盘",
+      "noNodes": "该存储池暂无节点",
+      "diskCount": "{{count}} 块磁盘",
+      "diskFree": "可用 {{value}}"
     },
     "nodes": {
       "title": "节点",
@@ -662,10 +744,36 @@
       "completed": "已完成",
       "failed": "失败",
       "retryable": "可重试",
+      "maxAttempts": "达到最大次数",
+      "statusMix": "状态分布",
+      "oldestPending": "最早待处理",
+      "lastUpdated": "最近更新",
+      "none": "-",
       "ecTitle": "纠删码",
       "ecProfiles": "Profile",
       "ecEnabled": "已启用",
       "ecDisabled": "已禁用"
+    },
+    "repairStatuses": {
+      "pending": "待处理",
+      "retryscheduled": "等待重试",
+      "failed": "失败"
+    },
+    "repairItems": {
+      "title": "修复队列明细",
+      "count": "{{count}} 项",
+      "loading": "正在加载修复队列...",
+      "empty": "暂无待处理修复项",
+      "queued": "排队",
+      "next": "下次",
+      "columns": {
+        "object": "对象",
+        "status": "状态",
+        "reason": "原因",
+        "attempts": "尝试",
+        "schedule": "调度",
+        "error": "最近错误"
+      }
     },
     "tasks": {
       "title": "维护控制",

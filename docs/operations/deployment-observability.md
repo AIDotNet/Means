@@ -53,6 +53,8 @@ http://localhost:5183  means-node3
 
 注意：多节点 compose 主要验证节点/磁盘拓扑、Console 页面、diagnostics 和 background task observability。当前每个节点仍是独立 XlFs 命名空间，不要在分布式 metadata/RPC 完成前把 S3 数据面流量负载均衡到这些节点。
 
+内部节点间 shard RPC 已预留 `/api/internal/cluster/shards/{diskId}/{relativePath}`，使用 `Means:Cluster:InternalAuthToken` 保护，并按 `Means:Cluster:MaxShardTransferBytes` 做流式传输上限。当前它是后续跨节点 EC placement/repair/rebalance 的数据通道底座，不代表 S3 数据面已经可以多节点负载均衡。
+
 ## Console 与数据面安全
 
 生产环境必须：
@@ -204,7 +206,6 @@ groups:
 - `/metrics` 只允许 Prometheus 或内网访问。
 - `Means:Storage:Disks` 指向持久化卷。
 - `WriteQuorum`、`ReadQuorum` 与磁盘数匹配。
-- 已确认 legacy SQLite 数据不会被误认为新 XlFs 命名空间。
 - 已建立 metadata snapshot 和数据目录备份策略。
 - 已启用 Prometheus scrape 和核心告警。
 - 如需 tracing，已启用 `Means:Telemetry:Enabled` 并配置 OTLP endpoint。

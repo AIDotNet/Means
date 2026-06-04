@@ -2,8 +2,8 @@ namespace Means.Core;
 
 /// <summary>
 /// Maintenance boundary for metadata durability features.
-/// Keeping it separate from the object data-plane port makes the SQLite metadata backend replaceable
-/// by a distributed metadata service without changing S3 request handlers.
+/// Keeping it separate from the object data-plane port lets MeansLogDb evolve toward
+/// distributed metadata without changing S3 request handlers.
 /// </summary>
 public interface IMetadataMaintenanceStore
 {

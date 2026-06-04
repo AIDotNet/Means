@@ -2,7 +2,7 @@ name: means-single
 
 services:
   means:
-    image: hejiale010426/means
+    image: means:aot-scratch
     build:
       context: .
       dockerfile: src/Means/Dockerfile
@@ -20,8 +20,6 @@ services:
       Means__S3__DomainSuffix: "${MEANS_S3_DOMAIN_SUFFIX:-means.local}"
       Means__S3__AliasPrefix: "/s3"
 
-      Means__Storage__Backend: "XlFs"
-      Means__Storage__DatabasePath: "/data/legacy/means.db"
       Means__Storage__ObjectsPath: "/data/objects"
       Means__Storage__Disks__0: "/data/xlfs/disk1"
       Means__Storage__Disks__1: "/data/xlfs/disk2"
@@ -34,7 +32,6 @@ services:
       Means__Storage__WriteQuorum: "3"
       Means__Storage__ReadQuorum: "1"
       Means__Storage__MetaSyncMode: "${MEANS_META_SYNC_MODE:-Always}"
-      Means__Storage__AllowNewFormatWithExistingSqlite: "false"
       Means__Storage__VerifyChecksumOnRead: "${MEANS_VERIFY_CHECKSUM_ON_READ:-false}"
       Means__Storage__DefaultAccessKey: "${MEANS_ACCESS_KEY:-meansadmin}"
       Means__Storage__DefaultSecretKey: "${MEANS_SECRET_KEY:-meansadmin-local-secret}"
@@ -61,7 +58,6 @@ services:
       Means__Console__SessionHours: "${MEANS_CONSOLE_SESSION_HOURS:-8}"
     volumes:
       - means-objects:/data/objects
-      - means-legacy:/data/legacy
       - means-xlfs-disk1:/data/xlfs/disk1
       - means-xlfs-disk2:/data/xlfs/disk2
       - means-xlfs-disk3:/data/xlfs/disk3
@@ -69,7 +65,6 @@ services:
 
 volumes:
   means-objects:
-  means-legacy:
   means-xlfs-disk1:
   means-xlfs-disk2:
   means-xlfs-disk3:

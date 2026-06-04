@@ -1,14 +1,15 @@
 using Means.Core;
 using Means.Configuration;
-using Means.Infrastructure.SqliteFs;
 using Means.Infrastructure.XlFs;
 using Means.Protocol.S3;
 using Means.Security;
 using Means.Services;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.Extensions.Options;
+#if MEANS_OPENTELEMETRY
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
+#endif
 
 namespace Means.Composition;
 
@@ -26,27 +27,28 @@ public static class MeansDataPlaneServiceCollectionExtensions
         // Configuration sections intentionally mirror project boundaries:
         // Means:S3 configures protocol/address behavior, while Means:Storage configures local durability.
         services.Configure<S3AddressingOptions>(configuration.GetSection("Means:S3"));
-        services.Configure<SqliteFsOptions>(configuration.GetSection("Means:Storage"));
         services.Configure<XlFsOptions>(configuration.GetSection("Means:Storage"));
         services.Configure<ClusterOptions>(configuration.GetSection("Means:Cluster"));
         services.Configure<ConsoleOptions>(configuration.GetSection("Means:Console"));
         services.Configure<RequestLimitsOptions>(configuration.GetSection("Means:RequestLimits"));
         services.Configure<MeansRateLimitOptions>(configuration.GetSection("Means:RateLimits"));
         services.Configure<TelemetryOptions>(configuration.GetSection("Means:Telemetry"));
+#if MEANS_OPENTELEMETRY
         AddMeansOpenTelemetry(services, configuration);
+#endif
 
-        // Register both adapters, then resolve the selected backend from final bound options.
-        // This keeps WebApplicationFactory/test overrides and production config behavior consistent.
-        services.AddSingleton<SqliteFsStore>();
+        // XlFs is the storage backend; metadata is handled by the in-process MeansLogDb.
         services.AddSingleton<XlFsStore>();
-        services.AddSingleton<IObjectStore>(ResolveStore<IObjectStore>);
-        services.AddSingleton<IAccessKeyStore>(ResolveStore<IAccessKeyStore>);
-        services.AddSingleton<IBucketPolicyRepository>(ResolveStore<IBucketPolicyRepository>);
-        services.AddSingleton<IConsoleStore>(ResolveStore<IConsoleStore>);
-        services.AddSingleton<IClusterStore>(ResolveStore<IClusterStore>);
-        services.AddSingleton<IErasureCodingProfileStore>(ResolveStore<IErasureCodingProfileStore>);
-        services.AddSingleton<IMetadataMaintenanceStore>(ResolveStore<IMetadataMaintenanceStore>);
-        services.AddSingleton<IStorageMaintenanceOperations>(ResolveStore<IStorageMaintenanceOperations>);
+        services.AddSingleton<IObjectStore>(services => services.GetRequiredService<XlFsStore>());
+        services.AddSingleton<IAccessKeyStore>(services => services.GetRequiredService<XlFsStore>());
+        services.AddSingleton<IBucketPolicyRepository>(services => services.GetRequiredService<XlFsStore>());
+        services.AddSingleton<IConsoleStore>(services => services.GetRequiredService<XlFsStore>());
+        services.AddSingleton<IClusterStore>(services => services.GetRequiredService<XlFsStore>());
+        services.AddSingleton<IClusterShardStore>(services => services.GetRequiredService<XlFsStore>());
+        services.AddSingleton<IClusterShardTransport, HttpClusterShardTransport>();
+        services.AddSingleton<IErasureCodingProfileStore>(services => services.GetRequiredService<XlFsStore>());
+        services.AddSingleton<IMetadataMaintenanceStore>(services => services.GetRequiredService<XlFsStore>());
+        services.AddSingleton<IStorageMaintenanceOperations>(services => services.GetRequiredService<XlFsStore>());
         services.AddSingleton<IObjectPlacementPlanner>(
             _ => new DeterministicObjectPlacementPlanner(configuration["Means:Cluster:PlacementSeed"] ?? "means-v1"));
         services.AddSingleton<IBackgroundTaskRegistry, BackgroundTaskRegistry>();
@@ -87,15 +89,7 @@ public static class MeansDataPlaneServiceCollectionExtensions
         return services;
     }
 
-    private static T ResolveStore<T>(IServiceProvider services)
-        where T : class
-    {
-        var backend = services.GetRequiredService<IOptions<XlFsOptions>>().Value.Backend;
-        return string.Equals(backend, XlFsOptions.BackendName, StringComparison.OrdinalIgnoreCase)
-            ? (T)(object)services.GetRequiredService<XlFsStore>()
-            : (T)(object)services.GetRequiredService<SqliteFsStore>();
-    }
-
+#if MEANS_OPENTELEMETRY
     private static void AddMeansOpenTelemetry(IServiceCollection services, IConfiguration configuration)
     {
         var options = configuration.GetSection("Means:Telemetry").Get<TelemetryOptions>() ?? new TelemetryOptions();
@@ -139,6 +133,7 @@ public static class MeansDataPlaneServiceCollectionExtensions
                 }
             });
     }
+#endif
 
     private static void ValidateConsoleDefaults(IConfiguration configuration, IHostEnvironment environment)
     {

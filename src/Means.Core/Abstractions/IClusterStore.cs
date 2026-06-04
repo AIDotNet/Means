@@ -2,8 +2,8 @@ namespace Means.Core;
 
 /// <summary>
 /// Cluster metadata boundary used by distributed storage control-plane features.
-/// The single-node SQLite adapter implements this first so higher layers can move
-/// from local topology to real multi-node placement without changing API shape.
+/// XlFs implements this first so higher layers can move from local topology to real
+/// multi-node placement without changing API shape.
 /// </summary>
 public interface IClusterStore
 {

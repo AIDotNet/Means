@@ -47,7 +47,7 @@ export type Overview = {
   bucketCount: number
   objectCount: number
   totalBytes: number
-  databasePath: string
+  metadataPath: string
   objectsPath: string
   serviceHost: string
   domainSuffix: string
@@ -82,7 +82,7 @@ export type DashboardStats = {
     serversOffline: number
     drivesOnline: number
     drivesOffline: number
-    databasePath: string
+    metadataPath: string
     objectsPath: string
     serviceHost: string
     domainSuffix: string
@@ -197,6 +197,20 @@ export type ReplicaRepairQueueStatusDiagnostics = {
   count: number
 }
 
+export type ReplicaRepairQueueItemDiagnostics = {
+  bucketName: string
+  key: string
+  objectId: string
+  reason: string
+  status: string
+  attemptCount: number
+  queuedAt: string
+  updatedAt: string
+  lastAttemptAt: string | null
+  nextAttemptAt: string | null
+  lastError: string | null
+}
+
 export type ReplicaRepairQueueDiagnostics = {
   totalCount: number
   pendingCount: number
@@ -207,6 +221,7 @@ export type ReplicaRepairQueueDiagnostics = {
   oldestPendingAt: string | null
   lastUpdatedAt: string | null
   statuses: ReplicaRepairQueueStatusDiagnostics[]
+  items: ReplicaRepairQueueItemDiagnostics[]
 }
 
 export type ErasureCodingDiagnostics = {
@@ -218,6 +233,11 @@ export type ErasureCodingDiagnostics = {
 export type MetadataDiagnostics = {
   pendingCommitCount: number
   orphanedReplicaRecordCount: number
+}
+
+export type ClusterInternalTransportDiagnostics = {
+  shardRpcEnabled: boolean
+  maxShardTransferBytes: number
 }
 
 export type ClusterDiagnosticsSummary = {
@@ -284,6 +304,7 @@ export type ClusterDiagnostics = {
   repairQueue: ReplicaRepairQueueDiagnostics
   metadata: MetadataDiagnostics
   erasureCoding: ErasureCodingDiagnostics
+  internalTransport: ClusterInternalTransportDiagnostics
   backgroundTasks: BackgroundTaskSnapshot[]
 }
 
@@ -408,6 +429,7 @@ export type SystemSettings = {
   maxUploadSizeBytes: number
   minimumMaxUploadSizeBytes: number
   maximumMaxUploadSizeBytes: number
+  publicOrigin: string | null
 }
 
 export class ApiError extends Error {
@@ -668,10 +690,10 @@ export const api = {
       method: "DELETE",
     }),
   settings: () => request<SystemSettings>("/api/console/settings"),
-  updateSettings: (maxUploadSizeBytes: number) =>
+  updateSettings: (maxUploadSizeBytes: number, publicOrigin?: string | null) =>
     request<SystemSettings>("/api/console/settings", {
       method: "PUT",
-      body: { maxUploadSizeBytes },
+      body: { maxUploadSizeBytes, publicOrigin: publicOrigin || null },
     }),
   audit: () => request<AuditEntry[]>("/api/console/audit"),
 }

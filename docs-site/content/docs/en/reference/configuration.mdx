@@ -17,12 +17,18 @@ Means configuration lives in `src/Means/appsettings.json` and can be overridden 
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `Means:Storage:Backend` | `XlFs` | default storage backend |
 | `Means:Storage:ObjectsPath` | `data/objects` | single-disk or legacy object path |
 | `Means:Storage:Disks` | compose-specific | XlFs disk roots |
 | `Means:Storage:WriteQuorum` | `3` | minimum write quorum |
 | `Means:Storage:ReadQuorum` | `1` | minimum read quorum |
 | `Means:Storage:VerifyChecksumOnRead` | `false` | synchronous checksum verification during reads |
+
+## Cluster
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `Means:Cluster:InternalAuthToken` | empty | internal shard RPC token; empty disables `/api/internal/cluster` |
+| `Means:Cluster:MaxShardTransferBytes` | `5368709120` | maximum bytes per streamed internal shard transfer |
 
 ## Limits and Rate Limits
 

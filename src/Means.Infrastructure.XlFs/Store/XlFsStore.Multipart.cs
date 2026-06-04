@@ -184,7 +184,7 @@ public sealed partial class XlFsStore
 
         if (existing is not null && !string.Equals(await GetBucketVersioningStatusAsync(upload.BucketName, cancellationToken), BucketVersioningStatuses.Enabled, StringComparison.Ordinal))
         {
-            DeleteObjectFilesQuietly(existing);
+            await DeleteObjectFilesQuietlyAsync(existing, CancellationToken.None);
         }
 
         var completedPartNumbers = ordered.Select(part => part.PartNumber).ToHashSet();

@@ -1,6 +1,6 @@
 # Means
 
-Means 是一个基于 .NET 的企业级应用框架，一个可自部署的 S3-compatible 对象存储服务，当前默认运行时使用 MinIO-inspired `XlFs` 自研存储后端（单节点多盘、对象 manifest、quorum、LogDb 元数据索引），并保留 SQLite + filesystem 作为 legacy/test adapter。
+Means 是一个基于 .NET 的企业级应用框架，一个可自部署的 S3-compatible 对象存储服务，当前默认运行时使用 MinIO-inspired `XlFs` 自研存储后端（单节点多盘、对象 manifest、quorum、LogDb 元数据索引），完全采用自研 MeansLogDb 元数据引擎。
 
 > 截至 2026-05-09：本文档描述的是仓库当前代码状态，而不是仅设计目标。
 
@@ -8,7 +8,7 @@ Means 是一个基于 .NET 的企业级应用框架，一个可自部署的 S3-c
 
 - 后端：`ASP.NET Core net10.0`（`src/Means`）
 - 协议层：S3 兼容地址解析、SigV4 校验、S3 XML 响应（`src/Means.Protocol.S3`）
-- 存储层：默认 `XlFs`（`src/Means.Infrastructure.XlFs`），legacy `SQLite(metadata) + filesystem(blob)`（`src/Means.Infrastructure.SqliteFs`）
+- 存储层：默认 `XlFs`（`src/Means.Infrastructure.XlFs`）
 - 管理面：Cookie 鉴权的 Console API + React 控制台（`/api/console` + `src/Means/wwwroot`）
 - SDK：C# SDK、TypeScript SDK（browser-safe）与 Node 扩展
 
@@ -139,16 +139,13 @@ docker compose -f compose.multinode.yaml up -d --build
 | `Means:S3:ServiceHost` | `api.means.local` | Path-style 主机名 |
 | `Means:S3:DomainSuffix` | `means.local` | Virtual-hosted-style 域后缀 |
 | `Means:S3:AliasPrefix` | `/s3` | 同源 S3 别名前缀 |
-| `Means:Storage:Backend` | `XlFs` | 存储后端；`XlFs` 为默认，`SqliteFs` 仅作为 legacy/test adapter |
-| `Means:Storage:DatabasePath` | `data/means.db` | legacy SQLite 元数据库路径；XlFs 仅用它检测旧数据，不自动迁移 |
 | `Means:Storage:ObjectsPath` | `data/objects` | 未配置 `Disks` 时的 XlFs 单盘目录/legacy 对象目录 |
 | `Means:Storage:Disks` | `/data/xlfs/disk1...` | XlFs 多盘根目录，每块盘会写入 `.means.sys/format.json` |
-| `Means:Storage:ErasureDataShards` | `2` | XlFs EC profile 数据分片配置；首期数据路径为 full-copy quorum |
-| `Means:Storage:ErasureParityShards` | `2` | XlFs EC profile 校验分片配置；首期数据路径为 full-copy quorum |
+| `Means:Storage:ErasureDataShards` | `2` | XlFs EC profile 数据分片配置；普通 `PutObject` 在本地在线磁盘满足 data+parity 时写入 `reed-solomon-v1` shards |
+| `Means:Storage:ErasureParityShards` | `2` | XlFs EC profile 校验分片配置；磁盘不足或 multipart 路径暂回退/保持 full-copy quorum |
 | `Means:Storage:WriteQuorum` | `3` | XlFs 写成功 quorum |
 | `Means:Storage:ReadQuorum` | `1` | XlFs 读 quorum |
 | `Means:Storage:MetaSyncMode` | `Always` | XlFs metadata WAL flush 策略 |
-| `Means:Storage:AllowNewFormatWithExistingSqlite` | `false` | 检测到旧 SQLite 文件且没有 XlFs format 时，是否允许直接启动新命名空间 |
 | `Means:Storage:VerifyChecksumOnRead` | `false` | XlFs/legacy 读取时是否同步校验 SHA256；开启会提升数据校验强度但会增加一次完整读 I/O |
 | `Means:Storage:DefaultAccessKey` | `meansadmin` | 首次初始化的默认 AccessKey |
 | `Means:Storage:DefaultSecretKey` | `meansadminsecret` | 首次初始化的默认 SecretKey |
@@ -171,6 +168,8 @@ docker compose -f compose.multinode.yaml up -d --build
 | `Means:Telemetry:ServiceName` | `Means` | tracing resource service name |
 | `Means:Telemetry:OtlpEndpoint` | `` | OTLP exporter endpoint；为空时不导出到 collector |
 | `Means:Telemetry:SampleRatio` | `1.0` | trace 采样比例，范围 `0..1` |
+| `Means:Cluster:InternalAuthToken` | `` | 内部节点间 shard RPC token；为空时 `/api/internal/cluster` 端点返回 404 并关闭 |
+| `Means:Cluster:MaxShardTransferBytes` | `5368709120` | 单个内部 shard 流式传输上限，避免跨节点误传超大请求 |
 | `Means:Console:AdminUser` | `admin` | 控制台管理员用户名 |
 | `Means:Console:AdminPassword` | `meansadmin` | 控制台管理员密码 |
 | `Means:Console:SessionHours` | `8` | 控制台会话有效时长（小时） |
@@ -179,9 +178,7 @@ docker compose -f compose.multinode.yaml up -d --build
 
 - 生产环境下，如果仍使用默认控制台账号密码，服务会在启动时拒绝运行。
 - 生产环境应同时替换默认 AccessKey/SecretKey。
-- 默认 `XlFs` 不会自动迁移旧 SQLite 数据；如果 `DatabasePath` 已存在且磁盘没有 `.means.sys/format.json`，启动会失败并提示使用 export/import 或显式设置 `AllowNewFormatWithExistingSqlite=true`。
 - 未完成的 Multipart Upload 会由后台任务自动清理元数据和 part 文件；前端取消/失败仍会 best-effort 调用 abort，但磁盘释放不依赖浏览器请求一定成功。
-- Storage GC 只扫描受控存储目录和已注册磁盘目录；XlFs 按 `MeansLogDb`/`xl.meta` 引用集判断 orphan 文件，legacy SQLite 按 SQLite 元数据引用集判断；未超过年龄保护的文件不会删除。
 - 默认读取路径不在返回对象前同步扫全文件做 SHA256，避免大对象 GET 双倍磁盘 I/O；需要强读时校验时可开启 `VerifyChecksumOnRead`，后台 scrub 仍会做校验和修复入队。
 - S3 单次 `PutObject` 和 multipart `UploadPart` 会共享上传并发限制；超过限制返回 S3 XML 错误 `SlowDown` 和 `Retry-After: 1`。
 - Console 登录、Console API 和 S3 数据面都支持固定窗口 API 限流；超过限制时 Console 返回 JSON `SlowDown`，S3 返回 XML `SlowDown`，并带 `Retry-After`。

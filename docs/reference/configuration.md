@@ -16,8 +16,6 @@ SDK endpoint 应指向数据面。例如同源 alias 部署时使用 `https://ho
 
 | Key | 默认值 | 说明 |
 | --- | --- | --- |
-| `Means:Storage:Backend` | `XlFs` | 默认存储后端；非 XlFs 时使用 SqliteFs legacy/test adapter |
-| `Means:Storage:DatabasePath` | `/data/means.db` | SqliteFs metadata 路径；XlFs 用于 legacy 检测 |
 | `Means:Storage:ObjectsPath` | `/data/objects` | 未配置多盘时的对象根目录 |
 | `Means:Storage:Disks` | `/data/xlfs/disk1..4` | XlFs 多盘根目录 |
 | `Means:Storage:DeploymentId` | 空 | XlFs deployment 标识，空时生成或从格式读取 |
@@ -25,7 +23,6 @@ SDK endpoint 应指向数据面。例如同源 alias 部署时使用 `https://ho
 | `Means:Storage:WriteQuorum` | `3` | 写成功 quorum |
 | `Means:Storage:ReadQuorum` | `1` | 读 quorum |
 | `Means:Storage:MetaSyncMode` | `Always` | MeansLogDb WAL flush 策略 |
-| `Means:Storage:AllowNewFormatWithExistingSqlite` | `false` | 检测到旧 SQLite 文件且没有 XlFs format 时是否允许创建新命名空间 |
 | `Means:Storage:ReplicaCount` | `1` | 期望副本数 |
 | `Means:Storage:VerifyChecksumOnRead` | `false` | GET 读路径是否同步校验 SHA-256 |
 | `Means:Storage:HotObjectCacheMaxBytes` | `67108864` | 热点小对象缓存总预算 |
@@ -72,6 +69,8 @@ SDK endpoint 应指向数据面。例如同源 alias 部署时使用 `https://ho
 | `Means:Cluster:HeartbeatIntervalSeconds` | `15` | heartbeat 周期 |
 | `Means:Cluster:OfflineAfterSeconds` | `60` | 节点离线判定窗口 |
 | `Means:Cluster:DiskHealthIntervalSeconds` | `30` | 磁盘健康检查周期 |
+| `Means:Cluster:InternalAuthToken` | 空 | 内部节点间 shard RPC token；为空时 `/api/internal/cluster` 关闭并返回 404 |
+| `Means:Cluster:MaxShardTransferBytes` | `5368709120` | 单个内部 shard 流式 PUT 上限 |
 
 ## 请求限制与限流
 

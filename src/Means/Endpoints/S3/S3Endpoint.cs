@@ -1,5 +1,5 @@
+using System.Globalization;
 using System.Text.Json;
-using System.Xml.Linq;
 using Means.Core;
 using Means.Protocol.S3;
 using Microsoft.Extensions.Options;
@@ -139,7 +139,7 @@ public static class S3Endpoint
 
         if (maxAge is not null)
         {
-            context.Response.Headers.AccessControlMaxAge = maxAge.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            context.Response.Headers.AccessControlMaxAge = maxAge.Value.ToString(CultureInfo.InvariantCulture);
         }
     }
 
@@ -154,25 +154,199 @@ public static class S3Endpoint
         allowedHeaders = "";
         exposeHeaders = "";
         maxAge = null;
-        var document = XDocument.Parse(xml);
-        foreach (var rule in document.Root?.Elements().Where(element => element.Name.LocalName == "CORSRule") ?? [])
+        foreach (var rule in Elements(xml, "CORSRule"))
         {
-            var origins = rule.Elements().Where(element => element.Name.LocalName == "AllowedOrigin").Select(element => element.Value).ToArray();
-            var methods = rule.Elements().Where(element => element.Name.LocalName == "AllowedMethod").Select(element => element.Value).ToArray();
+            var origins = ElementValues(rule, "AllowedOrigin").ToArray();
+            var methods = ElementValues(rule, "AllowedMethod").ToArray();
             if (!origins.Any(value => value == "*" || string.Equals(value, origin, StringComparison.OrdinalIgnoreCase))
                 || !methods.Any(value => string.Equals(value, method, StringComparison.OrdinalIgnoreCase)))
             {
                 continue;
             }
 
-            allowedHeaders = string.Join(", ", rule.Elements().Where(element => element.Name.LocalName == "AllowedHeader").Select(element => element.Value));
-            exposeHeaders = string.Join(", ", rule.Elements().Where(element => element.Name.LocalName == "ExposeHeader").Select(element => element.Value));
-            var maxAgeValue = rule.Elements().FirstOrDefault(element => element.Name.LocalName == "MaxAgeSeconds")?.Value;
-            maxAge = int.TryParse(maxAgeValue, out var parsed) ? parsed : null;
+            allowedHeaders = string.Join(", ", ElementValues(rule, "AllowedHeader"));
+            exposeHeaders = string.Join(", ", ElementValues(rule, "ExposeHeader"));
+            maxAge = int.TryParse(ElementValues(rule, "MaxAgeSeconds").FirstOrDefault(), NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
+                ? parsed
+                : null;
             return true;
         }
 
         return false;
+    }
+
+    private static IEnumerable<string> ElementValues(string xml, string localName)
+    {
+        foreach (var content in Elements(xml, localName))
+        {
+            yield return DecodeXml(content);
+        }
+    }
+
+    private static IEnumerable<string> Elements(string xml, string localName)
+    {
+        var position = 0;
+        while (TryReadNextElement(xml, position, out var name, out var content, out var next))
+        {
+            if (string.Equals(name, localName, StringComparison.Ordinal))
+            {
+                yield return content;
+            }
+
+            foreach (var child in Elements(content, localName))
+            {
+                yield return child;
+            }
+
+            position = next;
+        }
+    }
+
+    private static bool TryReadNextElement(
+        string xml,
+        int start,
+        out string localName,
+        out string content,
+        out int next)
+    {
+        localName = "";
+        content = "";
+        next = start;
+        var position = start;
+        while (position < xml.Length)
+        {
+            var openStart = xml.IndexOf('<', position);
+            if (openStart < 0 || openStart + 1 >= xml.Length)
+            {
+                return false;
+            }
+
+            var marker = xml[openStart + 1];
+            if (marker == '/')
+            {
+                position = openStart + 2;
+                continue;
+            }
+
+            if (marker == '?')
+            {
+                position = SkipUntil(xml, openStart + 2, "?>");
+                continue;
+            }
+
+            if (marker == '!')
+            {
+                position = xml.AsSpan(openStart).StartsWith("<!--", StringComparison.Ordinal)
+                    ? SkipUntil(xml, openStart + 4, "-->")
+                    : SkipUntil(xml, openStart + 2, ">");
+                continue;
+            }
+
+            var nameStart = openStart + 1;
+            var nameEnd = nameStart;
+            while (nameEnd < xml.Length && !char.IsWhiteSpace(xml[nameEnd]) && xml[nameEnd] != '/' && xml[nameEnd] != '>')
+            {
+                nameEnd++;
+            }
+
+            if (nameEnd == nameStart)
+            {
+                return false;
+            }
+
+            localName = LocalName(xml[nameStart..nameEnd]);
+            var openEnd = xml.IndexOf('>', nameEnd);
+            if (openEnd < 0)
+            {
+                return false;
+            }
+
+            if (IsSelfClosing(xml, openEnd))
+            {
+                next = openEnd + 1;
+                return true;
+            }
+
+            var closeStart = FindCloseTag(xml, localName, openEnd + 1);
+            if (closeStart < 0)
+            {
+                return false;
+            }
+
+            var closeEnd = xml.IndexOf('>', closeStart);
+            if (closeEnd < 0)
+            {
+                return false;
+            }
+
+            content = xml[(openEnd + 1)..closeStart];
+            next = closeEnd + 1;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static int FindCloseTag(string xml, string localName, int start)
+    {
+        var position = start;
+        while (position < xml.Length)
+        {
+            var closeStart = xml.IndexOf("</", position, StringComparison.Ordinal);
+            if (closeStart < 0)
+            {
+                return -1;
+            }
+
+            var nameStart = closeStart + 2;
+            var nameEnd = nameStart;
+            while (nameEnd < xml.Length && !char.IsWhiteSpace(xml[nameEnd]) && xml[nameEnd] != '>')
+            {
+                nameEnd++;
+            }
+
+            if (string.Equals(LocalName(xml[nameStart..nameEnd]), localName, StringComparison.Ordinal))
+            {
+                return closeStart;
+            }
+
+            position = nameEnd;
+        }
+
+        return -1;
+    }
+
+    private static int SkipUntil(string xml, int start, string marker)
+    {
+        var end = xml.IndexOf(marker, start, StringComparison.Ordinal);
+        return end < 0 ? xml.Length : end + marker.Length;
+    }
+
+    private static bool IsSelfClosing(string xml, int openEnd)
+    {
+        var index = openEnd - 1;
+        while (index >= 0 && char.IsWhiteSpace(xml[index]))
+        {
+            index--;
+        }
+
+        return index >= 0 && xml[index] == '/';
+    }
+
+    private static string LocalName(string name)
+    {
+        var separator = name.IndexOf(':', StringComparison.Ordinal);
+        return separator < 0 ? name : name[(separator + 1)..];
+    }
+
+    private static string DecodeXml(string value)
+    {
+        return value
+            .Replace("&lt;", "<", StringComparison.Ordinal)
+            .Replace("&gt;", ">", StringComparison.Ordinal)
+            .Replace("&quot;", "\"", StringComparison.Ordinal)
+            .Replace("&apos;", "'", StringComparison.Ordinal)
+            .Replace("&amp;", "&", StringComparison.Ordinal);
     }
 
     private static async Task TryRecordMetricAsync(

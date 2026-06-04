@@ -1,5 +1,5 @@
 using Means.Core;
-using Means.Infrastructure.SqliteFs;
+using Means.Infrastructure.XlFs;
 using Microsoft.Extensions.Options;
 
 namespace Means.Services;
@@ -11,14 +11,14 @@ namespace Means.Services;
 public sealed class ReplicaRepairService : BackgroundService
 {
     private readonly IStorageMaintenanceOperations _store;
-    private readonly IOptions<SqliteFsOptions> _options;
+    private readonly IOptions<XlFsOptions> _options;
     private readonly IBackgroundTaskRegistry _backgroundTasks;
     private readonly ILogger<ReplicaRepairService> _logger;
     private readonly BackgroundTaskDescriptor _task;
 
     public ReplicaRepairService(
         IStorageMaintenanceOperations store,
-        IOptions<SqliteFsOptions> options,
+        IOptions<XlFsOptions> options,
         IBackgroundTaskRegistry backgroundTasks,
         ILogger<ReplicaRepairService> logger)
     {
@@ -61,12 +61,13 @@ public sealed class ReplicaRepairService : BackgroundService
                     if (queued > 0 || repaired > 0)
                     {
                         _logger.LogInformation(
-                            "Replica repair pass queued {QueuedCount} items and repaired {RepairedCount} items.",
+                            "Replica repair pass queued {QueuedCount} items and repaired {RepairedCount} items with concurrency {MaxConcurrency}.",
                             queued,
-                            repaired);
+                            repaired,
+                            Math.Max(1, _options.Value.ReplicaRepairMaxConcurrency));
                     }
 
-                    return $"queued={queued}; repaired={repaired}";
+                    return $"queued={queued}; repaired={repaired}; concurrency={Math.Max(1, _options.Value.ReplicaRepairMaxConcurrency)}; throttleMs={Math.Max(0, _options.Value.ReplicaRepairThrottleDelayMilliseconds)}";
                 },
                 cancellationToken);
         }

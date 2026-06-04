@@ -13,6 +13,7 @@ public sealed partial class XlFsStore
         public const string HealPrefix = "heal:";
         public const string EcProfilePrefix = "ecp:";
         public const string ClusterNodePrefix = "cluster:node:";
+        public const string ClusterPoolGlobalPrefix = "cluster:pool:";
         public const string SystemSettings = "sys:settings";
         public const string ClusterInfo = "cluster:info";
 
@@ -77,5 +78,9 @@ public sealed partial class XlFsStore
         public static string EcProfile(string profileId) => EcProfilePrefix + Escape(profileId);
 
         public static string ClusterNode(string nodeId) => ClusterNodePrefix + Escape(nodeId);
+
+        public static string ClusterPoolPrefix(string clusterId) => ClusterPoolGlobalPrefix + Escape(clusterId) + ":";
+
+        public static string ClusterPool(string clusterId, string poolId) => ClusterPoolPrefix(clusterId) + Escape(poolId);
     }
 }

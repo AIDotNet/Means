@@ -10,7 +10,6 @@ src/
   Means.Core/                    Core models, requests, abstractions, policy evaluator
   Means.Protocol.S3/             S3 addressing, SigV4, XML, compression, validation
   Means.Infrastructure.XlFs/     Default storage backend
-  Means.Infrastructure.SqliteFs/ Legacy/test storage backend
 SDKs/
   csharp/                        Means.Client
   typescript/packages/sdk        Browser-safe shared SDK
@@ -123,7 +122,6 @@ Console API tests 覆盖：
 
 - ASP.NET Core S3-compatible 数据面。
 - XlFs 默认存储后端。
-- SqliteFs legacy/test adapter。
 - Bucket/Object CRUD。
 - ListObjectsV2。
 - Range GET。
@@ -145,7 +143,7 @@ Console API tests 覆盖：
 
 | 方向 | 状态 |
 | --- | --- |
-| Reed-Solomon EC 写入/读取/重建 | 未完成 |
+| Reed-Solomon EC 写入/读取/重建 | 部分完成：XlFs 普通 `PutObject` 本地 EC 写入与缺失 data shard 读重建已落地；multipart、跨节点 EC 和后台 repair/rebalance 待完成 |
 | 真实多节点分布式 metadata/RPC | 未完成 |
 | 生产级 rebalance 和数据迁移 | 未完成 |
 | IAM/STS | 未完成 |

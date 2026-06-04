@@ -1,6 +1,6 @@
 using Means.Configuration;
 using Means.Core;
-using Means.Infrastructure.SqliteFs;
+using Means.Infrastructure.XlFs;
 using Microsoft.Extensions.Options;
 
 namespace Means.Services;
@@ -9,7 +9,7 @@ public sealed class BackgroundTaskManager : IBackgroundTaskManager
 {
     private readonly IStorageMaintenanceOperations _store;
     private readonly IClusterStore _clusterStore;
-    private readonly IOptions<SqliteFsOptions> _storageOptions;
+    private readonly IOptions<XlFsOptions> _storageOptions;
     private readonly IOptions<ClusterOptions> _clusterOptions;
     private readonly IBackgroundTaskRegistry _registry;
     private readonly ILogger<BackgroundTaskManager> _logger;
@@ -18,7 +18,7 @@ public sealed class BackgroundTaskManager : IBackgroundTaskManager
     public BackgroundTaskManager(
         IStorageMaintenanceOperations store,
         IClusterStore clusterStore,
-        IOptions<SqliteFsOptions> storageOptions,
+        IOptions<XlFsOptions> storageOptions,
         IOptions<ClusterOptions> clusterOptions,
         IBackgroundTaskRegistry registry,
         ILogger<BackgroundTaskManager> logger)
@@ -152,10 +152,14 @@ public sealed class BackgroundTaskManager : IBackgroundTaskManager
         var repaired = await _store.RepairQueuedReplicasAsync(Math.Max(1, _storageOptions.Value.ReplicaRepairBatchSize), cancellationToken);
         if (queued > 0 || repaired > 0)
         {
-            _logger.LogInformation("Manual replica repair queued {QueuedCount} items and repaired {RepairedCount} items.", queued, repaired);
+            _logger.LogInformation(
+                "Manual replica repair queued {QueuedCount} items and repaired {RepairedCount} items with concurrency {MaxConcurrency}.",
+                queued,
+                repaired,
+                Math.Max(1, _storageOptions.Value.ReplicaRepairMaxConcurrency));
         }
 
-        return $"queued={queued}; repaired={repaired}";
+        return $"queued={queued}; repaired={repaired}; concurrency={Math.Max(1, _storageOptions.Value.ReplicaRepairMaxConcurrency)}; throttleMs={Math.Max(0, _storageOptions.Value.ReplicaRepairThrottleDelayMilliseconds)}";
     }
 
     private async Task<string?> RunErasureCodingRepairAsync(CancellationToken cancellationToken)
@@ -220,7 +224,7 @@ public sealed class BackgroundTaskManager : IBackgroundTaskManager
     private ClusterNodeRegistration CreateRegistration(DateTimeOffset now)
     {
         var options = _clusterOptions.Value;
-        var disk = ReadObjectDisk(options);
+        var disks = ReadObjectDisks(options);
         return new ClusterNodeRegistration(
             Normalize(options.ClusterId, "local"),
             Normalize(options.ClusterName, "Local Means Cluster"),
@@ -229,40 +233,76 @@ public sealed class BackgroundTaskManager : IBackgroundTaskManager
             Normalize(options.NodeEndpoint, "http://localhost"),
             Normalize(options.PoolId, "pool-1"),
             Normalize(options.PoolName, "Pool 1"),
-            [disk],
+            disks,
             now);
     }
 
-    private StorageDiskRegistration ReadObjectDisk(ClusterOptions options)
+    private IReadOnlyList<StorageDiskRegistration> ReadObjectDisks(ClusterOptions options)
     {
-        var objectsPath = ResolvePath(_storageOptions.Value.ObjectsPath);
+        var storage = _storageOptions.Value;
+        var roots = storage.Disks.Length == 0
+            ? [ResolvePath(storage.ObjectsPath)]
+            : storage.Disks.Select(ResolvePath).ToArray();
+        var disks = new List<StorageDiskRegistration>(roots.Length);
+        for (var index = 0; index < roots.Length; index++)
+        {
+            var path = roots[index];
+            var fallbackDiskId = roots.Length == 1 && storage.Disks.Length == 0
+                ? Normalize(options.ObjectDiskId, "local-objects")
+                : "disk-" + index.ToString("D2");
+            try
+            {
+                Directory.CreateDirectory(path);
+                var root = Path.GetPathRoot(path);
+                if (string.IsNullOrWhiteSpace(root))
+                {
+                    root = path;
+                }
+
+                var drive = new DriveInfo(root);
+                disks.Add(new StorageDiskRegistration(
+                    ReadFormattedDiskId(path, fallbackDiskId),
+                    Normalize(options.PoolId, "pool-1"),
+                    path,
+                    Math.Max(0, drive.TotalSize),
+                    Math.Max(0, drive.AvailableFreeSpace),
+                    StorageDiskStatuses.Online));
+            }
+            catch
+            {
+                disks.Add(new StorageDiskRegistration(
+                    fallbackDiskId,
+                    Normalize(options.PoolId, "pool-1"),
+                    path,
+                    0,
+                    0,
+                    StorageDiskStatuses.Offline));
+            }
+        }
+
+        return disks;
+    }
+
+    private static string ReadFormattedDiskId(string rootPath, string fallback)
+    {
+        var formatPath = Path.Combine(rootPath, ".means.sys", "format.json");
         try
         {
-            Directory.CreateDirectory(objectsPath);
-            var root = Path.GetPathRoot(objectsPath);
-            if (string.IsNullOrWhiteSpace(root))
+            if (!File.Exists(formatPath))
             {
-                root = objectsPath;
+                return fallback;
             }
 
-            var drive = new DriveInfo(root);
-            return new StorageDiskRegistration(
-                Normalize(options.ObjectDiskId, "local-objects"),
-                Normalize(options.PoolId, "pool-1"),
-                objectsPath,
-                Math.Max(0, drive.TotalSize),
-                Math.Max(0, drive.AvailableFreeSpace),
-                StorageDiskStatuses.Online);
+            using var document = System.Text.Json.JsonDocument.Parse(File.ReadAllText(formatPath));
+            return document.RootElement.TryGetProperty("diskId", out var diskId)
+                && diskId.ValueKind == System.Text.Json.JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(diskId.GetString())
+                ? diskId.GetString()!
+                : fallback;
         }
         catch
         {
-            return new StorageDiskRegistration(
-                Normalize(options.ObjectDiskId, "local-objects"),
-                Normalize(options.PoolId, "pool-1"),
-                objectsPath,
-                0,
-                0,
-                StorageDiskStatuses.Offline);
+            return fallback;
         }
     }
 

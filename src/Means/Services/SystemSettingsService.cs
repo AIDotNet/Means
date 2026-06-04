@@ -54,6 +54,8 @@ public sealed class SystemSettingsService
 
     private static SystemSettings Validate(SystemSettings settings)
     {
-        return new SystemSettings(SystemSettings.ValidateMaxUploadSizeBytes(settings.MaxUploadSizeBytes));
+        return new SystemSettings(
+            SystemSettings.ValidateMaxUploadSizeBytes(settings.MaxUploadSizeBytes),
+            SystemSettings.NormalizePublicOrigin(settings.PublicOrigin));
     }
 }

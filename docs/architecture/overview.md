@@ -10,7 +10,6 @@ Means 的主服务在 `src/Means`，通过 ASP.NET Core 同时承载 S3-compatib
 | Core | `src/Means.Core` | 定义 bucket/object/upload/version/cluster/audit/task 等模型和抽象接口 |
 | Protocol | `src/Means.Protocol.S3` | S3 地址解析、SigV4 header/query 签名校验、S3 XML 序列化、压缩协商、命名校验 |
 | XlFs Storage | `src/Means.Infrastructure.XlFs` | 默认后端，多盘对象文件布局、`MeansLogDb` 元数据、replica manifest、repair、GC、cluster maintenance |
-| SqliteFs Storage | `src/Means.Infrastructure.SqliteFs` | legacy/test adapter，SQLite metadata + filesystem blob，用于测试和兼容验证 |
 | Console UI | `web` | React/Vite 控制台，构建后作为静态资源由 `src/Means` 提供 |
 | Docs Site | `docs-site` | Next/Fumadocs 风格文档站点，当前为未跟踪目录，不属于主构建链路 |
 | SDKs | `SDKs` | C#、浏览器 TypeScript、Node TypeScript SDK，以及 SDK 合同规范 |
@@ -29,7 +28,7 @@ Means 的主服务在 `src/Means`，通过 ASP.NET Core 同时承载 S3-compatib
 核心组合点在 `src/Means/Composition/MeansDataPlaneServiceCollectionExtensions.cs`。它按配置绑定以下区域：
 
 - `Means:S3` -> `S3AddressingOptions`
-- `Means:Storage` -> `SqliteFsOptions` 和 `XlFsOptions`
+- `Means:Storage` -> `XlFsOptions`
 - `Means:Cluster` -> `ClusterOptions`
 - `Means:Console` -> `ConsoleOptions`
 - `Means:RequestLimits` -> `RequestLimitsOptions`
@@ -51,7 +50,7 @@ flowchart LR
     Bucket --> Store["IObjectStore"]
     Object --> Store
     Policy --> PolicyRepo["IBucketPolicyRepository"]
-    Store --> XlFs["XlFsStore or SqliteFsStore"]
+    Store --> XlFs["XlFsStore"]
 ```
 
 数据面以 catch-all 路由承接 S3 请求。S3 并不是传统 REST 控制器风格，而是由 method、host、path、query subresource 和 header 共同决定语义，因此 `S3EndpointRouteBuilderExtensions` 注册：
@@ -118,4 +117,3 @@ SDK 不是旁路实现，而是围绕 S3 数据面合同构建：
 - Console cookie 与 S3 access key 是两套认证体系，不能互换。
 - 浏览器端 SDK 不应持有 SecretKey，只使用匿名 policy 或短期 presigned URL。
 - 当前多节点 compose 用于验证 topology、健康检查和运维页面，不代表生产级多节点数据面负载均衡。
-- 默认 XlFs 后端不会自动迁移 legacy SQLite 数据；检测到旧 SQLite 文件时需要显式决策。

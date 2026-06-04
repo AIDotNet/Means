@@ -17,6 +17,7 @@ export function SettingsPage() {
   const [overview, setOverview] = useState<Overview | null>(null)
   const [settings, setSettings] = useState<SystemSettings | null>(null)
   const [maxUploadMiB, setMaxUploadMiB] = useState("")
+  const [publicOrigin, setPublicOrigin] = useState("")
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
@@ -25,6 +26,7 @@ export function SettingsPage() {
         setOverview(nextOverview)
         setSettings(nextSettings)
         setMaxUploadMiB(bytesToMiB(nextSettings.maxUploadSizeBytes).toString())
+        setPublicOrigin(nextSettings.publicOrigin ?? "")
       })
       .catch((error: Error) => toast.error(error.message))
   }, [])
@@ -59,11 +61,20 @@ export function SettingsPage() {
       return
     }
 
+    let normalizedPublicOrigin: string | null
+    try {
+      normalizedPublicOrigin = normalizePublicOriginInput(publicOrigin)
+    } catch {
+      toast.error(t("settings.errors.invalidPublicOrigin"))
+      return
+    }
+
     setSaving(true)
     try {
-      const updated = await api.updateSettings(maxUploadSizeBytes)
+      const updated = await api.updateSettings(maxUploadSizeBytes, normalizedPublicOrigin)
       setSettings(updated)
       setMaxUploadMiB(bytesToMiB(updated.maxUploadSizeBytes).toString())
+      setPublicOrigin(updated.publicOrigin ?? "")
       toast.success(t("settings.toast.saved"))
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("settings.errors.saveFailed"))
@@ -74,6 +85,8 @@ export function SettingsPage() {
 
   const pathStyle = `https://${overview?.serviceHost ?? "api.means.local"}/{bucket}/{key}`
   const virtualHosted = `https://{bucket}.${overview?.domainSuffix ?? "means.local"}/{key}`
+  const aliasPrefix = overview?.aliasPrefix ?? "/s3"
+  const boundAlias = `${settings?.publicOrigin ?? window.location.origin}${aliasPrefix}/{bucket}/{key}`
   const minimumMiB = settings ? bytesToMiB(settings.minimumMaxUploadSizeBytes) : 1
   const maximumMiB = settings ? bytesToMiB(settings.maximumMaxUploadSizeBytes) : 5242880
 
@@ -119,12 +132,28 @@ export function SettingsPage() {
           </div>
         </SettingsSection>
         <SettingsSection title={t("settings.sections.endpoints.title")}>
+          <div className="grid gap-3">
+            <Label htmlFor="public-origin">{t("settings.sections.endpoints.publicOrigin")}</Label>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Input
+                id="public-origin"
+                placeholder="https://means.asia"
+                value={publicOrigin}
+                onChange={(event) => setPublicOrigin(event.target.value)}
+              />
+              <Button className="shrink-0" onClick={saveSettings} disabled={!settings || saving}>
+                <SaveIcon />
+                {t("common.actions.save")}
+              </Button>
+            </div>
+          </div>
+          <SettingRow label={t("settings.sections.endpoints.boundAlias")} value={boundAlias} onCopy={copy} />
           <SettingRow label="Path-style" value={pathStyle} onCopy={copy} />
           <SettingRow label="Virtual-hosted-style" value={virtualHosted} onCopy={copy} />
-          <SettingRow label={t("settings.sections.endpoints.consoleAlias")} value={overview?.aliasPrefix ?? "/s3"} onCopy={copy} />
+          <SettingRow label={t("settings.sections.endpoints.consoleAlias")} value={aliasPrefix} onCopy={copy} />
         </SettingsSection>
         <SettingsSection title={t("settings.sections.localStorage.title")}>
-          <SettingRow label={t("settings.sections.localStorage.sqliteMetadata")} value={overview?.databasePath ?? "-"} onCopy={copy} />
+          <SettingRow label={t("settings.sections.localStorage.metadataStore")} value={overview?.metadataPath ?? "-"} onCopy={copy} />
           <SettingRow label={t("settings.sections.localStorage.objectBlobs")} value={overview?.objectsPath ?? "-"} onCopy={copy} />
           <SettingRow label={t("settings.sections.localStorage.version")} value={overview?.version ?? "-"} onCopy={copy} />
         </SettingsSection>
@@ -150,6 +179,28 @@ export function SettingsPage() {
 
 function bytesToMiB(value: number): number {
   return Math.round(value / 1024 / 1024)
+}
+
+function normalizePublicOriginInput(value: string): string | null {
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return null
+  }
+
+  const candidate = trimmed.includes("://") ? trimmed : `https://${trimmed}`
+  const url = new URL(candidate)
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    url.pathname !== "/"
+  ) {
+    throw new Error("Invalid public origin")
+  }
+
+  return url.origin
 }
 
 function SettingsSection({ title, children }: { title: string; children: React.ReactNode }) {

@@ -1,6 +1,6 @@
 # 存储与一致性
 
-Means 当前默认存储后端是 `Means.Infrastructure.XlFs`。它把对象字节写入多盘文件布局，把 bucket/object/version/upload/access key/policy/settings/audit/task/EC profile 等元数据写入自研 `MeansLogDb`。`SqliteFs` 后端仍保留，主要用于 legacy 数据、集成测试和行为对照。
+Means 当前默认存储后端是 `Means.Infrastructure.XlFs`。它把对象字节写入多盘文件布局，把 bucket/object/version/upload/access key/policy/settings/audit/task/EC profile 等元数据写入自研 `MeansLogDb`。旧的外部数据库后端已移除，运行时只使用自研 MeansLogDb。
 
 ## XlFs 数据布局
 
@@ -106,7 +106,6 @@ Means 使用 opaque object id 作为 version id，这让物理数据布局不暴
 
 ## 当前边界
 
-- XlFs 当前数据路径以 full-copy quorum 为主，Reed-Solomon EC 写入/读取/重建仍是后续项。
+- XlFs 普通 `PutObject` 已支持本地对象级 `reed-solomon-v1` data/parity shards，并可在缺失 data shard 时从剩余 shard 重建读取；multipart EC、跨节点 EC/RPC、生产级 EC repair/rebalance 仍是后续项。
 - 多节点 compose 不共享同一个分布式 metadata 命名空间，不应作为生产数据面负载均衡。
-- XlFs 完整 idempotency key namespace 仍需补齐；legacy SqliteFs 已有 `x-means-idempotency-key` 行为。
 - Replication worker、Bucket notification 事件投递、Object Lock、IAM/STS、SSE 仍是规划能力。

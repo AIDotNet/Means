@@ -9,7 +9,6 @@ Means 由 ASP.NET Core 服务承载数据面和管理面。S3 endpoint 处理对
 
 - Protocol：`Means.Protocol.S3` 负责 S3 地址解析、SigV4 校验、XML 序列化和命名规则。
 - Core：`Means.Core` 定义对象、bucket、集群、策略、后台任务等模型与抽象。
-- Storage：默认 `Means.Infrastructure.XlFs`，保留 `SqliteFs` 作为 legacy/test adapter。
 - Service：`src/Means` 组合 endpoint、中间件、后台任务、metrics 和 Console API。
 - Console：`web` 构建为静态资源，通过 `/api/console` 与服务交互。
 

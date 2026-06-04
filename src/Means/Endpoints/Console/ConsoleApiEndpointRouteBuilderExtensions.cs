@@ -3,7 +3,7 @@ using System.Security.Claims;
 using System.Text.Json;
 using Means.Configuration;
 using Means.Core;
-using Means.Infrastructure.SqliteFs;
+using Means.Infrastructure.XlFs;
 using Means.Protocol.S3;
 using Means.Security;
 using Means.Services;
@@ -120,7 +120,7 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
     private static async Task<IResult> OverviewAsync(
         HttpContext context,
         IConsoleStore consoleStore,
-        IOptions<SqliteFsOptions> storageOptions,
+        IOptions<XlFsOptions> storageOptions,
         IOptions<S3AddressingOptions> addressingOptions,
         CancellationToken cancellationToken)
     {
@@ -134,7 +134,7 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
             metrics.BucketCount,
             metrics.ObjectCount,
             metrics.TotalBytes,
-            ResolvePath(storage.DatabasePath),
+            ResolveMetadataPath(storage),
             ResolvePath(storage.ObjectsPath),
             addressing.ServiceHost,
             addressing.DomainSuffix,
@@ -147,7 +147,7 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
         int? hours,
         IConsoleStore consoleStore,
         IClusterStore clusterStore,
-        IOptions<SqliteFsOptions> storageOptions,
+        IOptions<XlFsOptions> storageOptions,
         IOptions<S3AddressingOptions> addressingOptions,
         IOptions<ClusterOptions> clusterOptions,
         CancellationToken cancellationToken)
@@ -163,12 +163,12 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
 
         var storage = storageOptions.Value;
         var addressing = addressingOptions.Value;
-        var databasePath = ResolvePath(storage.DatabasePath);
+        var metadataPath = ResolveMetadataPath(storage);
         var objectsPath = ResolvePath(storage.ObjectsPath);
         var capacity = GetCapacity(objectsPath, metrics.TotalBytes);
         var pathStatuses = new[]
         {
-            GetPathStatus("SQLite Metadata", databasePath, isFilePath: true),
+            GetPathStatus("LogDb Metadata", metadataPath, isFilePath: false),
             GetPathStatus("Object Blobs", objectsPath, isFilePath: false)
         };
         var onlineDrives = pathStatuses.Count(path => path.Online);
@@ -199,7 +199,7 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
                 ServersOffline: topology.Nodes.Count > 0 ? offlineNodes : 0,
                 DrivesOnline: clusterDisks.Length > 0 ? clusterOnlineDrives : onlineDrives,
                 DrivesOffline: clusterDisks.Length > 0 ? clusterOfflineDrives : pathStatuses.Length - onlineDrives,
-                DatabasePath: databasePath,
+                MetadataPath: metadataPath,
                 ObjectsPath: objectsPath,
                 ServiceHost: addressing.ServiceHost,
                 DomainSuffix: addressing.DomainSuffix,
@@ -229,8 +229,15 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
         IOptions<ClusterOptions> clusterOptions,
         CancellationToken cancellationToken)
     {
-        var diagnostics = await consoleStore.GetClusterDiagnosticsAsync(ClusterOfflineBefore(clusterOptions.Value), cancellationToken);
-        diagnostics = diagnostics with { BackgroundTasks = backgroundTasks.ListTasks() };
+        var configuredCluster = clusterOptions.Value;
+        var diagnostics = await consoleStore.GetClusterDiagnosticsAsync(ClusterOfflineBefore(configuredCluster), cancellationToken);
+        diagnostics = diagnostics with
+        {
+            InternalTransport = new ClusterInternalTransportDiagnostics(
+                !string.IsNullOrWhiteSpace(configuredCluster.InternalAuthToken),
+                Math.Max(0, configuredCluster.MaxShardTransferBytes)),
+            BackgroundTasks = backgroundTasks.ListTasks()
+        };
         await AppendAuditAsync(
             consoleStore,
             Actor(context),
@@ -600,11 +607,19 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
         HttpContext context,
         string bucketName,
         PresignRequest request,
-        IOptions<SqliteFsOptions> storageOptions,
+        IOptions<XlFsOptions> storageOptions,
+        SystemSettingsService settings,
         IConsoleStore consoleStore,
         CancellationToken cancellationToken)
     {
-        var response = CreatePresignedResponse(context, bucketName, request.Key, HttpMethod.Put, request.ExpiresSeconds, storageOptions.Value);
+        var response = CreatePresignedResponse(
+            context,
+            bucketName,
+            request.Key,
+            HttpMethod.Put,
+            request.ExpiresSeconds,
+            storageOptions.Value,
+            await settings.GetAsync(cancellationToken));
         await AppendAuditAsync(consoleStore, Actor(context), "object.presign-upload", $"{bucketName}/{request.Key}", "success", null, cancellationToken);
         return Results.Ok(response);
     }
@@ -636,7 +651,8 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
         HttpContext context,
         string bucketName,
         PresignMultipartPartRequest request,
-        IOptions<SqliteFsOptions> storageOptions,
+        IOptions<XlFsOptions> storageOptions,
+        SystemSettingsService settings,
         IConsoleStore consoleStore,
         CancellationToken cancellationToken)
     {
@@ -654,6 +670,7 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
             HttpMethod.Put,
             request.ExpiresSeconds,
             storageOptions.Value,
+            await settings.GetAsync(cancellationToken),
             new Dictionary<string, string>
             {
                 ["partNumber"] = request.PartNumber.ToString(System.Globalization.CultureInfo.InvariantCulture),
@@ -703,14 +720,23 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
         HttpContext context,
         string bucketName,
         PresignRequest request,
-        IOptions<SqliteFsOptions> storageOptions,
+        IOptions<XlFsOptions> storageOptions,
+        SystemSettingsService settings,
         IConsoleStore consoleStore,
         CancellationToken cancellationToken)
     {
         var query = string.IsNullOrWhiteSpace(request.VersionId)
             ? null
             : new Dictionary<string, string> { ["versionId"] = request.VersionId };
-        var response = CreatePresignedResponse(context, bucketName, request.Key, HttpMethod.Get, request.ExpiresSeconds, storageOptions.Value, query);
+        var response = CreatePresignedResponse(
+            context,
+            bucketName,
+            request.Key,
+            HttpMethod.Get,
+            request.ExpiresSeconds,
+            storageOptions.Value,
+            await settings.GetAsync(cancellationToken),
+            query);
         await AppendAuditAsync(consoleStore, Actor(context), "object.presign-download", $"{bucketName}/{request.Key}", "success", null, cancellationToken);
         return Results.Ok(response);
     }
@@ -761,14 +787,14 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
         IConsoleStore consoleStore,
         CancellationToken cancellationToken)
     {
-        var updated = await settings.SaveAsync(new SystemSettings(request.MaxUploadSizeBytes), cancellationToken);
+        var updated = await settings.SaveAsync(new SystemSettings(request.MaxUploadSizeBytes, request.PublicOrigin), cancellationToken);
         await AppendAuditAsync(
             consoleStore,
             Actor(context),
             "settings.update",
-            "request-limits",
+            "system",
             "success",
-            $"Max upload size set to {updated.MaxUploadSizeBytes} bytes.",
+            $"Max upload size set to {updated.MaxUploadSizeBytes} bytes. Public origin: {updated.PublicOrigin ?? "(auto)"}.",
             cancellationToken);
         return Results.Ok(SystemSettingsResponse.From(updated));
     }
@@ -779,13 +805,15 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
         string key,
         HttpMethod method,
         int? requestedExpiresSeconds,
-        SqliteFsOptions storageOptions,
+        XlFsOptions storageOptions,
+        SystemSettings settings,
         IReadOnlyDictionary<string, string>? query = null)
     {
         S3NameValidator.ValidateBucketName(bucketName);
         S3NameValidator.ValidateObjectKey(key);
         var expiresSeconds = Math.Clamp(requestedExpiresSeconds ?? 900, 60, 604800);
-        var builder = new UriBuilder($"{context.Request.Scheme}://{context.Request.Host}/s3/{Uri.EscapeDataString(bucketName)}/{EscapeKey(key)}");
+        var origin = settings.PublicOrigin ?? $"{context.Request.Scheme}://{context.Request.Host}";
+        var builder = new UriBuilder($"{origin}/s3/{Uri.EscapeDataString(bucketName)}/{EscapeKey(key)}");
         if (query is not null && query.Count > 0)
         {
             builder.Query = string.Join("&", query.Select(pair => $"{Uri.EscapeDataString(pair.Key)}={Uri.EscapeDataString(pair.Value)}"));
@@ -796,7 +824,8 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
             method,
             new SigV4SigningCredentials(storageOptions.DefaultAccessKey, storageOptions.DefaultSecretKey),
             TimeSpan.FromSeconds(expiresSeconds));
-        return new PresignedTransferResponse(method.Method, signed.PathAndQuery, expiresSeconds);
+        var url = settings.PublicOrigin is null ? signed.PathAndQuery : signed.AbsoluteUri;
+        return new PresignedTransferResponse(method.Method, url, expiresSeconds);
     }
 
     private static async Task AppendAuditAsync(
@@ -826,6 +855,12 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
     private static string ResolvePath(string path)
     {
         return Path.IsPathRooted(path) ? path : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, path));
+    }
+
+    private static string ResolveMetadataPath(XlFsOptions storage)
+    {
+        var root = storage.Disks.Length > 0 ? storage.Disks[0] : storage.ObjectsPath;
+        return Path.Combine(ResolvePath(root), ".means.sys", "meta");
     }
 
     private static DateTimeOffset TruncateToHour(DateTimeOffset value)
@@ -1120,7 +1155,7 @@ public sealed record OverviewResponse(
     long BucketCount,
     long ObjectCount,
     long TotalBytes,
-    string DatabasePath,
+    string MetadataPath,
     string ObjectsPath,
     string ServiceHost,
     string DomainSuffix,
@@ -1165,7 +1200,7 @@ public sealed record DashboardNodesResponse(
     int ServersOffline,
     int DrivesOnline,
     int DrivesOffline,
-    string DatabasePath,
+    string MetadataPath,
     string ObjectsPath,
     string ServiceHost,
     string DomainSuffix,
@@ -1258,19 +1293,21 @@ public sealed record AbortMultipartConsoleRequest(string Key, string UploadId);
 
 public sealed record CreateAccessKeyRequest(string? AccessKey);
 
-public sealed record UpdateSystemSettingsRequest(long MaxUploadSizeBytes);
+public sealed record UpdateSystemSettingsRequest(long MaxUploadSizeBytes, string? PublicOrigin = null);
 
 public sealed record SystemSettingsResponse(
     long MaxUploadSizeBytes,
     long MinimumMaxUploadSizeBytes,
-    long MaximumMaxUploadSizeBytes)
+    long MaximumMaxUploadSizeBytes,
+    string? PublicOrigin)
 {
     public static SystemSettingsResponse From(SystemSettings settings)
     {
         return new SystemSettingsResponse(
             settings.MaxUploadSizeBytes,
             SystemSettings.MinimumMaxUploadSizeBytes,
-            SystemSettings.MaximumMaxUploadSizeBytes);
+            SystemSettings.MaximumMaxUploadSizeBytes,
+            settings.PublicOrigin);
     }
 }
 

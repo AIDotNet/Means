@@ -28,6 +28,7 @@ import {
   type BackgroundTaskRunRecord,
   type BackgroundTaskSnapshot,
   type ClusterDiagnostics,
+  type ReplicaRepairQueueItemDiagnostics,
   type StorageDiskInfo,
 } from "@/lib/api-client"
 import { formatBytes, formatDateTime, formatNumber } from "@/lib/formatters"
@@ -121,6 +122,11 @@ export function HealthPage() {
     + (summary?.offlineDiskCount ?? 0)
     + (replica?.underReplicatedObjectCount ?? 0)
     + (repair?.failedCount ?? 0)
+  const repairStatusSummary = repair?.statuses.length
+    ? repair.statuses
+        .map((status) => `${t(`health.repairStatuses.${status.status.toLowerCase()}`, { defaultValue: status.status })}: ${formatNumber(status.count)}`)
+        .join(" / ")
+    : t("health.diagnostics.none")
 
   return (
     <div className="space-y-3">
@@ -196,6 +202,10 @@ export function HealthPage() {
                 [t("health.diagnostics.completed"), formatNumber(repair?.completedCount ?? 0)],
                 [t("health.diagnostics.failed"), formatNumber(repair?.failedCount ?? 0)],
                 [t("health.diagnostics.retryable"), formatNumber(repair?.retryableFailedCount ?? 0)],
+                [t("health.diagnostics.maxAttempts"), formatNumber(repair?.maxAttemptsReachedCount ?? 0)],
+                [t("health.diagnostics.statusMix"), repairStatusSummary],
+                [t("health.diagnostics.oldestPending"), repair?.oldestPendingAt ? formatDateTime(repair.oldestPendingAt) : t("health.diagnostics.none")],
+                [t("health.diagnostics.lastUpdated"), repair?.lastUpdatedAt ? formatDateTime(repair.lastUpdatedAt) : t("health.diagnostics.none")],
               ]}
             />
             <DiagnosticBlock
@@ -209,6 +219,17 @@ export function HealthPage() {
           </div>
         </Surface>
       </div>
+
+      <Surface>
+        <PanelTitle
+          icon={AlertTriangleIcon}
+          title={t("health.repairItems.title")}
+          value={t("health.repairItems.count", { count: repair?.items.length ?? 0 })}
+        />
+        <div className="mt-4">
+          <RepairQueueTable items={repair?.items ?? []} loading={loading && !state} />
+        </div>
+      </Surface>
 
       <Surface>
         <PanelTitle icon={RotateCwIcon} title={t("health.tasks.title")} value={t("health.tasks.count", { count: state?.tasks.tasks.length ?? 0 })} />
@@ -226,6 +247,70 @@ export function HealthPage() {
         </div>
       </Surface>
     </div>
+  )
+}
+
+function RepairQueueTable({
+  items,
+  loading,
+}: {
+  items: ReplicaRepairQueueItemDiagnostics[]
+  loading: boolean
+}) {
+  const { t } = useTranslation()
+
+  if (loading) {
+    return <EmptyState>{t("health.repairItems.loading")}</EmptyState>
+  }
+
+  if (items.length === 0) {
+    return <EmptyState>{t("health.repairItems.empty")}</EmptyState>
+  }
+
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>{t("health.repairItems.columns.object")}</TableHead>
+          <TableHead>{t("health.repairItems.columns.status")}</TableHead>
+          <TableHead>{t("health.repairItems.columns.reason")}</TableHead>
+          <TableHead>{t("health.repairItems.columns.attempts")}</TableHead>
+          <TableHead>{t("health.repairItems.columns.schedule")}</TableHead>
+          <TableHead>{t("health.repairItems.columns.error")}</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {items.map((item) => (
+          <TableRow key={`${item.objectId}:${item.reason}`}>
+            <TableCell>
+              <div className="max-w-72 truncate font-semibold">{item.key}</div>
+              <div className="max-w-72 truncate text-xs text-muted-foreground">{item.bucketName}</div>
+              <div className="max-w-72 truncate font-mono text-[11px] text-muted-foreground">{item.objectId}</div>
+            </TableCell>
+            <TableCell><RepairStatusBadge status={item.status} /></TableCell>
+            <TableCell>
+              <div className="max-w-48 truncate font-mono text-xs">{item.reason}</div>
+            </TableCell>
+            <TableCell>{formatNumber(item.attemptCount)}</TableCell>
+            <TableCell>
+              <div className="text-xs">
+                <span className="font-medium text-muted-foreground">{t("health.repairItems.queued")}</span>{" "}
+                {formatDateTime(item.queuedAt)}
+              </div>
+              <div className="mt-1 text-xs">
+                <span className="font-medium text-muted-foreground">{t("health.repairItems.next")}</span>{" "}
+                {item.nextAttemptAt ? formatDateTime(item.nextAttemptAt) : t("health.diagnostics.none")}
+              </div>
+            </TableCell>
+            <TableCell>
+              <div className="max-w-72 truncate font-mono text-xs text-muted-foreground">
+                {item.lastError ?? t("health.diagnostics.none")}
+              </div>
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
   )
 }
 
@@ -287,7 +372,7 @@ function DiagnosticBlock({ title, facts }: { title: string; facts: Array<[string
         {facts.map(([label, value]) => (
           <div key={label}>
             <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{label}</div>
-            <div className="mt-0.5 text-lg font-bold">{value}</div>
+            <div className="mt-0.5 break-words text-sm font-bold sm:text-base">{value}</div>
           </div>
         ))}
       </div>
@@ -481,6 +566,27 @@ function PanelTitle({
       </div>
       {value ? <div className="truncate text-[10px] font-semibold text-slate-500">{value}</div> : null}
     </div>
+  )
+}
+
+function RepairStatusBadge({ status }: { status: string }) {
+  const { t } = useTranslation()
+  const normalized = status.toLowerCase()
+  const failed = normalized === "failed"
+  const retrying = normalized === "retryscheduled"
+
+  return (
+    <Badge
+      variant="outline"
+      className={cn(
+        "rounded-full",
+        failed && "border-amber-200 bg-amber-50 text-amber-700 dark:bg-amber-950/30",
+        retrying && "border-sky-200 bg-sky-50 text-sky-700 dark:bg-sky-950/30",
+        !failed && !retrying && "border-emerald-200 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30"
+      )}
+    >
+      {t(`health.repairStatuses.${normalized}`, { defaultValue: status })}
+    </Badge>
   )
 }
 

@@ -92,7 +92,7 @@ internal static class S3ResponseWriter
         var rangeHeader = context.Request.Headers.Range.ToString();
         if (!string.IsNullOrWhiteSpace(rangeHeader))
         {
-            await WriteRangeAsync(context, data.Content, info.ContentLength, rangeHeader, headOnly, cancellationToken);
+            await WriteRangeAsync(context, data.Content, data.ContentPath, info.ContentLength, rangeHeader, headOnly, cancellationToken);
             return;
         }
 
@@ -130,7 +130,14 @@ internal static class S3ResponseWriter
         }
     }
 
-    private static async Task WriteRangeAsync(HttpContext context, Stream content, long contentLength, string rangeHeader, bool headOnly, CancellationToken cancellationToken)
+    private static async Task WriteRangeAsync(
+        HttpContext context,
+        Stream content,
+        string? contentPath,
+        long contentLength,
+        string rangeHeader,
+        bool headOnly,
+        CancellationToken cancellationToken)
     {
         var range = S3RequestParser.ParseRange(rangeHeader, contentLength);
         if (range is null)
@@ -153,12 +160,6 @@ internal static class S3ResponseWriter
         }
 
         context.Items[S3MetricsItems.EgressBytes] = length;
-        if (content is FileStream fileStream)
-        {
-            await context.Response.SendFileAsync(fileStream.Name, start, length, cancellationToken);
-            return;
-        }
-
         content.Seek(start, SeekOrigin.Begin);
         var buffer = new byte[1024 * 64];
         var remaining = length;

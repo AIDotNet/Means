@@ -93,7 +93,27 @@ public sealed record XlMultipartPartRecord(
     string ChecksumSha256,
     IReadOnlyList<XlShardManifest> Shards);
 
+public sealed record XlHealRecord(
+    string BucketName,
+    string Key,
+    string ObjectId,
+    string Reason,
+    string Status,
+    int AttemptCount,
+    DateTimeOffset QueuedAt,
+    DateTimeOffset UpdatedAt,
+    DateTimeOffset? LastAttemptAt,
+    DateTimeOffset? NextAttemptAt,
+    string? LastError);
+
 public sealed record XlAccessKeyRecord(string AccessKey, string SecretKey, bool Enabled, DateTimeOffset CreatedAt);
+
+public sealed record XlStoragePoolRecord(
+    string PoolId,
+    string ClusterId,
+    string Name,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt);
 
 public sealed record XlRequestMetricAggregate(
     DateTimeOffset HourUtc,
@@ -115,7 +135,9 @@ public sealed record XlRequestMetricAggregate(
 [JsonSerializable(typeof(XlBucketRecord))]
 [JsonSerializable(typeof(XlMultipartUploadRecord))]
 [JsonSerializable(typeof(XlMultipartPartRecord))]
+[JsonSerializable(typeof(XlHealRecord))]
 [JsonSerializable(typeof(XlAccessKeyRecord))]
+[JsonSerializable(typeof(XlStoragePoolRecord))]
 [JsonSerializable(typeof(XlRequestMetricAggregate))]
 [JsonSerializable(typeof(AuditEntry))]
 [JsonSerializable(typeof(BucketCorsConfiguration))]

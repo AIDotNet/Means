@@ -161,6 +161,411 @@ public sealed class XlFsStoreTests
     }
 
     [Fact]
+    public async Task XlFsPutObjectUsesReedSolomonShardsAndReadsThroughMissingDataShard()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            await using var store = CreateStore(root);
+            await store.CreateBucketAsync("ec", CancellationToken.None);
+            var payload = Enumerable.Range(0, 384 * 1024)
+                .Select(index => (byte)(index % 251))
+                .ToArray();
+
+            await store.PutObjectAsync(new PutObjectRequest(
+                "ec",
+                "recoverable.bin",
+                new MemoryStream(payload),
+                "application/octet-stream",
+                new Dictionary<string, string>(),
+                null,
+                null), CancellationToken.None);
+
+            var manifest = await ReadFirstXlManifestAsync(root);
+            Assert.Equal("reed-solomon-v1", manifest.Erasure.Algorithm);
+            Assert.Equal(2, manifest.Erasure.DataShards);
+            Assert.Equal(1, manifest.Erasure.ParityShards);
+            Assert.Equal(3, manifest.Parts[0].Shards.Count);
+
+            var firstDataShard = manifest.Parts[0].Shards.Single(shard => shard.SetIndex == 0);
+            File.Delete(ResolveShardPath(root, firstDataShard));
+
+            await using var data = await store.GetObjectAsync("ec", "recoverable.bin", CancellationToken.None);
+            using var buffer = new MemoryStream();
+            await data.Content.CopyToAsync(buffer);
+            Assert.Equal(payload, buffer.ToArray());
+        }
+        finally
+        {
+            DeleteTempRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task XlFsErasureCodingWritesAndReadsRemoteClusterShards()
+    {
+        var root = CreateTempRoot();
+        var transport = new InMemoryClusterShardTransport();
+        var planner = new FixedPlacementPlanner(
+            ("local", "disk-00"),
+            ("remote-a", "remote-disk-00"),
+            ("remote-a", "remote-disk-01"));
+        try
+        {
+            await using var store = CreateStore(root, planner, transport);
+            await store.CreateBucketAsync("ec", CancellationToken.None);
+            await RegisterClusterTopologyAsync(store, root);
+            var payload = Enumerable.Range(0, 256 * 1024)
+                .Select(index => (byte)(index % 239))
+                .ToArray();
+
+            await store.PutObjectAsync(new PutObjectRequest(
+                "ec",
+                "remote.bin",
+                new MemoryStream(payload),
+                "application/octet-stream",
+                new Dictionary<string, string>(),
+                null,
+                null), CancellationToken.None);
+
+            var manifest = await ReadFirstXlManifestAsync(root);
+            Assert.Contains(manifest.Parts[0].Shards, shard => shard.DiskId == "remote-disk-00");
+            Assert.Contains(manifest.Parts[0].Shards, shard => shard.DiskId == "remote-disk-01");
+            Assert.Equal(2, transport.WrittenShardCount);
+            Assert.Equal(2, transport.WrittenManifestCount);
+
+            var consistency = await store.CheckMetadataConsistencyAsync(repair: true, 100, CancellationToken.None);
+            Assert.Equal(0, consistency.MissingReplicaFileCount);
+            Assert.Equal(0, consistency.UnderReplicatedObjectCount);
+
+            var scrub = await store.ScrubObjectReplicasAsync(100, CancellationToken.None);
+            Assert.Equal(3, scrub.CheckedReplicas);
+            Assert.Equal(0, scrub.MissingReplicas);
+            Assert.Equal(0, scrub.CorruptReplicas);
+            Assert.True(transport.StatShardCount >= 2);
+
+            await using var data = await store.GetObjectAsync("ec", "remote.bin", CancellationToken.None);
+            using var buffer = new MemoryStream();
+            await data.Content.CopyToAsync(buffer);
+            Assert.Equal(payload, buffer.ToArray());
+            Assert.True(transport.ReadShardCount >= 1);
+
+            await store.DeleteObjectAsync("ec", "remote.bin", CancellationToken.None);
+            Assert.Equal(2, transport.DeletedShardCount);
+            Assert.Equal(2, transport.DeletedManifestCount);
+            await Assert.ThrowsAsync<MeansException>(() => store.GetObjectAsync("ec", "remote.bin", CancellationToken.None));
+        }
+        finally
+        {
+            DeleteTempRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task XlFsErasureCodingCleansRemoteShardsWhenManifestReplicationFails()
+    {
+        var root = CreateTempRoot();
+        var transport = new InMemoryClusterShardTransport
+        {
+            FailManifestWrites = true
+        };
+        var planner = new FixedPlacementPlanner(
+            ("local", "disk-00"),
+            ("remote-a", "remote-disk-00"),
+            ("remote-a", "remote-disk-01"));
+        try
+        {
+            await using var store = CreateStore(root, planner, transport);
+            await store.CreateBucketAsync("ec", CancellationToken.None);
+            await RegisterClusterTopologyAsync(store, root);
+            var payload = Enumerable.Range(0, 256 * 1024)
+                .Select(index => (byte)(index % 211))
+                .ToArray();
+
+            await Assert.ThrowsAsync<MeansException>(() => store.PutObjectAsync(new PutObjectRequest(
+                "ec",
+                "rollback.bin",
+                new MemoryStream(payload),
+                "application/octet-stream",
+                new Dictionary<string, string>(),
+                null,
+                null), CancellationToken.None));
+
+            Assert.Equal(2, transport.WrittenShardCount);
+            Assert.Equal(2, transport.DeletedShardCount);
+            Assert.Equal(0, transport.WrittenManifestCount);
+            await Assert.ThrowsAsync<MeansException>(() => store.GetObjectAsync("ec", "rollback.bin", CancellationToken.None));
+        }
+        finally
+        {
+            DeleteTempRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task XlFsRepairQueueRebuildsMissingRemoteDataShard()
+    {
+        var root = CreateTempRoot();
+        var transport = new InMemoryClusterShardTransport();
+        var planner = new FixedPlacementPlanner(
+            ("local", "disk-00"),
+            ("remote-a", "remote-disk-00"),
+            ("remote-a", "remote-disk-01"));
+        try
+        {
+            await using var store = CreateStore(root, planner, transport);
+            await store.CreateBucketAsync("ec", CancellationToken.None);
+            await RegisterClusterTopologyAsync(store, root);
+            var payload = Enumerable.Range(0, 256 * 1024)
+                .Select(index => (byte)(index % 229))
+                .ToArray();
+
+            await store.PutObjectAsync(new PutObjectRequest(
+                "ec",
+                "repair-remote-data.bin",
+                new MemoryStream(payload),
+                "application/octet-stream",
+                new Dictionary<string, string>(),
+                null,
+                null), CancellationToken.None);
+
+            var manifest = await ReadFirstXlManifestAsync(root);
+            var remoteDataShard = manifest.Parts[0].Shards.Single(shard => shard.SetIndex == 1);
+            Assert.True(transport.RemoveShard(remoteDataShard));
+
+            var scrub = await store.ScrubObjectReplicasAsync(100, CancellationToken.None);
+            Assert.Equal(1, scrub.MissingReplicas);
+            Assert.Equal(1, scrub.QueuedRepairs);
+
+            var repaired = await store.RepairQueuedReplicasAsync(100, CancellationToken.None);
+            Assert.Equal(1, repaired);
+            Assert.True(transport.HasShard(remoteDataShard));
+            Assert.True(transport.WrittenShardCount >= 3);
+
+            await using var data = await store.GetObjectAsync("ec", "repair-remote-data.bin", CancellationToken.None);
+            using var buffer = new MemoryStream();
+            await data.Content.CopyToAsync(buffer);
+            Assert.Equal(payload, buffer.ToArray());
+        }
+        finally
+        {
+            DeleteTempRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task XlFsConsistencyRepairRebuildsMissingRemoteParityShard()
+    {
+        var root = CreateTempRoot();
+        var transport = new InMemoryClusterShardTransport();
+        var planner = new FixedPlacementPlanner(
+            ("local", "disk-00"),
+            ("remote-a", "remote-disk-00"),
+            ("remote-a", "remote-disk-01"));
+        try
+        {
+            await using var store = CreateStore(root, planner, transport);
+            await store.CreateBucketAsync("ec", CancellationToken.None);
+            await RegisterClusterTopologyAsync(store, root);
+            var payload = Enumerable.Range(0, 256 * 1024)
+                .Select(index => (byte)(index % 223))
+                .ToArray();
+
+            await store.PutObjectAsync(new PutObjectRequest(
+                "ec",
+                "repair-remote-parity.bin",
+                new MemoryStream(payload),
+                "application/octet-stream",
+                new Dictionary<string, string>(),
+                null,
+                null), CancellationToken.None);
+
+            var manifest = await ReadFirstXlManifestAsync(root);
+            var remoteParityShard = manifest.Parts[0].Shards.Single(shard => shard.SetIndex == 2);
+            Assert.True(transport.RemoveShard(remoteParityShard));
+
+            var consistency = await store.CheckMetadataConsistencyAsync(repair: true, 100, CancellationToken.None);
+            Assert.Equal(1, consistency.MissingReplicaFileCount);
+            Assert.Equal(1, consistency.QueuedReplicaRepairCount);
+
+            var repaired = await store.RebuildErasureCodedObjectsAsync(100, CancellationToken.None);
+            Assert.Equal(1, repaired);
+            Assert.True(transport.HasShard(remoteParityShard));
+            Assert.True(transport.WrittenShardCount >= 3);
+
+            var scrub = await store.ScrubObjectReplicasAsync(100, CancellationToken.None);
+            Assert.Equal(3, scrub.CheckedReplicas);
+            Assert.Equal(0, scrub.MissingReplicas);
+            Assert.Equal(0, scrub.CorruptReplicas);
+        }
+        finally
+        {
+            DeleteTempRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task XlFsConsistencyRepairRewritesMissingRemoteManifestReplica()
+    {
+        var root = CreateTempRoot();
+        var transport = new InMemoryClusterShardTransport();
+        var planner = new FixedPlacementPlanner(
+            ("local", "disk-00"),
+            ("remote-a", "remote-disk-00"),
+            ("remote-a", "remote-disk-01"));
+        try
+        {
+            await using var store = CreateStore(root, planner, transport);
+            await store.CreateBucketAsync("ec", CancellationToken.None);
+            await RegisterClusterTopologyAsync(store, root);
+            var payload = Enumerable.Range(0, 256 * 1024)
+                .Select(index => (byte)(index % 197))
+                .ToArray();
+
+            await store.PutObjectAsync(new PutObjectRequest(
+                "ec",
+                "repair-remote-manifest.bin",
+                new MemoryStream(payload),
+                "application/octet-stream",
+                new Dictionary<string, string>(),
+                null,
+                null), CancellationToken.None);
+
+            var manifest = await ReadFirstXlManifestAsync(root);
+            var remoteShard = manifest.Parts[0].Shards.Single(shard => shard.DiskId == "remote-disk-00");
+            var manifestRelativePath = ManifestRelativePathFromShard(remoteShard);
+            Assert.True(transport.RemoveManifest(remoteShard.DiskId, manifestRelativePath));
+
+            var consistency = await store.CheckMetadataConsistencyAsync(repair: true, 100, CancellationToken.None);
+            Assert.Equal(1, consistency.MissingReplicaManifestCount);
+            Assert.Equal(0, consistency.MissingReplicaFileCount);
+            Assert.Equal(1, consistency.QueuedReplicaRepairCount);
+            Assert.True(transport.StatManifestCount >= 2);
+
+            var repaired = await store.RepairQueuedReplicasAsync(100, CancellationToken.None);
+            Assert.Equal(1, repaired);
+            Assert.True(transport.HasManifest(remoteShard.DiskId, manifestRelativePath));
+            Assert.True(transport.WrittenManifestCount >= 3);
+
+            var repairedConsistency = await store.CheckMetadataConsistencyAsync(repair: true, 100, CancellationToken.None);
+            Assert.Equal(0, repairedConsistency.MissingReplicaManifestCount);
+            Assert.Equal(0, repairedConsistency.MissingReplicaFileCount);
+        }
+        finally
+        {
+            DeleteTempRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task XlFsRepairQueueRecordsFailedRemoteRepairAfterMaxAttempts()
+    {
+        var root = CreateTempRoot();
+        var transport = new InMemoryClusterShardTransport();
+        var planner = new FixedPlacementPlanner(
+            ("local", "disk-00"),
+            ("remote-a", "remote-disk-00"),
+            ("remote-a", "remote-disk-01"));
+        try
+        {
+            await using var store = CreateStore(root, planner, transport, replicaRepairMaxAttempts: 1);
+            await store.CreateBucketAsync("ec", CancellationToken.None);
+            await RegisterClusterTopologyAsync(store, root);
+            var payload = Enumerable.Range(0, 256 * 1024)
+                .Select(index => (byte)(index % 193))
+                .ToArray();
+
+            await store.PutObjectAsync(new PutObjectRequest(
+                "ec",
+                "failed-repair.bin",
+                new MemoryStream(payload),
+                "application/octet-stream",
+                new Dictionary<string, string>(),
+                null,
+                null), CancellationToken.None);
+
+            var manifest = await ReadFirstXlManifestAsync(root);
+            var remoteDataShard = manifest.Parts[0].Shards.Single(shard => shard.SetIndex == 1);
+            Assert.True(transport.RemoveShard(remoteDataShard));
+
+            var consistency = await store.CheckMetadataConsistencyAsync(repair: true, 100, CancellationToken.None);
+            Assert.Equal(1, consistency.QueuedReplicaRepairCount);
+
+            transport.FailShardWrites = true;
+            var repaired = await store.RepairQueuedReplicasAsync(100, CancellationToken.None);
+            Assert.Equal(0, repaired);
+
+            var diagnostics = await store.GetClusterDiagnosticsAsync(DateTimeOffset.UtcNow.Subtract(TimeSpan.FromMinutes(1)), CancellationToken.None);
+            Assert.Equal(1, diagnostics.RepairQueue.TotalCount);
+            Assert.Equal(0, diagnostics.RepairQueue.PendingCount);
+            Assert.Equal(1, diagnostics.RepairQueue.FailedCount);
+            Assert.Equal(0, diagnostics.RepairQueue.RetryableFailedCount);
+            Assert.Equal(1, diagnostics.RepairQueue.MaxAttemptsReachedCount);
+            Assert.Contains(diagnostics.RepairQueue.Statuses, status => status.Status == "Failed" && status.Count == 1);
+            var item = Assert.Single(diagnostics.RepairQueue.Items);
+            Assert.Equal("ec", item.BucketName);
+            Assert.Equal("failed-repair.bin", item.Key);
+            Assert.Equal("ShardMissing", item.Reason);
+            Assert.Equal("Failed", item.Status);
+            Assert.Equal(1, item.AttemptCount);
+            Assert.NotNull(item.LastError);
+            Assert.NotNull(diagnostics.RepairQueue.LastUpdatedAt);
+        }
+        finally
+        {
+            DeleteTempRoot(root);
+        }
+    }
+
+
+    [Fact]
+    public async Task XlFsClusterShardStoreStreamsShardAndRejectsTraversal()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            await using var store = CreateStore(root);
+            var payload = Encoding.UTF8.GetBytes("remote shard payload");
+            var relativePath = Path.Combine("objects", "bucket-hash", "object-id", "shard.00");
+            var checksum = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(payload)).ToLowerInvariant();
+
+            var written = await store.WriteShardAsync(
+                "disk-00",
+                relativePath,
+                new MemoryStream(payload),
+                payload.Length,
+                checksum,
+                maxBytes: 1024 * 1024,
+                CancellationToken.None);
+
+            Assert.Equal(payload.Length, written.Length);
+            Assert.Equal(checksum, written.ChecksumSha256);
+
+            await using (var opened = await store.OpenShardAsync("disk-00", relativePath, CancellationToken.None))
+            {
+                using var buffer = new MemoryStream();
+                await opened.Content.CopyToAsync(buffer);
+                Assert.Equal(payload, buffer.ToArray());
+            }
+
+            await Assert.ThrowsAsync<MeansException>(() => store.WriteShardAsync(
+                "disk-00",
+                Path.Combine("objects", "..", "escape"),
+                new MemoryStream(payload),
+                payload.Length,
+                checksum,
+                maxBytes: 1024 * 1024,
+                CancellationToken.None));
+
+            Assert.True(await store.DeleteShardAsync("disk-00", relativePath, CancellationToken.None));
+        }
+        finally
+        {
+            DeleteTempRoot(root);
+        }
+    }
+
+    [Fact]
     public async Task XlFsMultipartCompleteBuildsMultipartEtagAndCleansUpload()
     {
         var root = CreateTempRoot();
@@ -240,12 +645,14 @@ public sealed class XlFsStoreTests
         }
     }
 
-    private static XlFsStore CreateStore(string root)
+    private static XlFsStore CreateStore(
+        string root,
+        IObjectPlacementPlanner? placementPlanner = null,
+        IClusterShardTransport? shardTransport = null,
+        int replicaRepairMaxAttempts = 5)
     {
-        return new XlFsStore(Options.Create(new XlFsOptions
+        var options = Options.Create(new XlFsOptions
         {
-            Backend = XlFsOptions.BackendName,
-            DatabasePath = Path.Combine(root, "means.db"),
             ObjectsPath = Path.Combine(root, "objects"),
             Disks =
             [
@@ -260,8 +667,88 @@ public sealed class XlFsStoreTests
             WriteQuorum = 2,
             ReadQuorum = 1,
             DefaultAccessKey = "meansadmin",
-            DefaultSecretKey = "meansadminsecret"
-        }));
+            DefaultSecretKey = "meansadminsecret",
+            ReplicaRepairMaxAttempts = replicaRepairMaxAttempts
+        });
+        return placementPlanner is null && shardTransport is null
+            ? new XlFsStore(options)
+            : new XlFsStore(
+                options,
+                placementPlanner ?? new DeterministicObjectPlacementPlanner(),
+                shardTransport ?? new DisabledClusterShardTransport());
+    }
+
+    private static async Task RegisterClusterTopologyAsync(XlFsStore store, string root)
+    {
+        var now = DateTimeOffset.UtcNow;
+        await store.RegisterNodeAsync(
+            new ClusterNodeRegistration(
+                "cluster-a",
+                "Cluster A",
+                "local",
+                "local",
+                "http://local",
+                "pool-a",
+                "Pool A",
+                [
+                    DiskRegistration("disk-00", Path.Combine(root, "disk1")),
+                    DiskRegistration("disk-01", Path.Combine(root, "disk2")),
+                    DiskRegistration("disk-02", Path.Combine(root, "disk3"))
+                ],
+                now),
+            CancellationToken.None);
+        await store.RegisterNodeAsync(
+            new ClusterNodeRegistration(
+                "cluster-a",
+                "Cluster A",
+                "remote-a",
+                "remote-a",
+                "http://remote-a",
+                "pool-a",
+                "Pool A",
+                [
+                    DiskRegistration("remote-disk-00", "/remote/disk0"),
+                    DiskRegistration("remote-disk-01", "/remote/disk1")
+                ],
+                now),
+            CancellationToken.None);
+    }
+
+    private static StorageDiskRegistration DiskRegistration(string diskId, string path)
+    {
+        return new StorageDiskRegistration(
+            diskId,
+            "pool-a",
+            path,
+            10L * 1024 * 1024 * 1024,
+            9L * 1024 * 1024 * 1024,
+            StorageDiskStatuses.Online);
+    }
+
+    private static async Task<XlObjectManifest> ReadFirstXlManifestAsync(string root)
+    {
+        var manifestPath = Directory.EnumerateFiles(root, "xl.meta", SearchOption.AllDirectories).First();
+        return JsonSerializer.Deserialize<XlObjectManifest>(await File.ReadAllTextAsync(manifestPath))
+            ?? throw new InvalidOperationException("Test manifest could not be parsed.");
+    }
+
+    private static string ResolveShardPath(string root, XlShardManifest shard)
+    {
+        foreach (var diskRoot in Directory.EnumerateDirectories(root, "disk*"))
+        {
+            var path = Path.Combine(diskRoot, shard.RelativePath);
+            if (File.Exists(path))
+            {
+                return path;
+            }
+        }
+
+        throw new FileNotFoundException("Could not resolve shard file for test.", shard.RelativePath);
+    }
+
+    private static string ManifestRelativePathFromShard(XlShardManifest shard)
+    {
+        return Path.Combine(Path.GetDirectoryName(shard.RelativePath)!, "xl.meta");
     }
 
     private static string CreateTempRoot()
@@ -296,5 +783,378 @@ public sealed class XlFsStoreTests
         }
 
         return ~crc;
+    }
+
+    private sealed class FixedPlacementPlanner(params (string NodeId, string DiskId)[] placements) : IObjectPlacementPlanner
+    {
+        public ObjectPlacementPlan PlanPlacement(ObjectPlacementRequest request, ClusterTopology topology)
+        {
+            var disks = topology.Nodes
+                .SelectMany(node => node.Disks.Select(disk => (node.NodeId, Disk: disk)))
+                .ToDictionary(item => (item.NodeId, item.Disk.DiskId), item => item.Disk);
+            return new ObjectPlacementPlan(
+                request.BucketName,
+                request.ObjectKey,
+                request.VersionId,
+                placements.Take(request.ReplicaCount)
+                    .Select((placement, index) =>
+                    {
+                        var disk = disks[(placement.NodeId, placement.DiskId)];
+                        return new ObjectPlacementReplica(
+                            index,
+                            placement.NodeId,
+                            placement.DiskId,
+                            disk.PoolId,
+                            disk.MountPath);
+                    })
+                    .ToArray());
+        }
+    }
+
+    private sealed class InMemoryClusterShardTransport : IClusterShardTransport
+    {
+        private readonly object _gate = new();
+        private readonly Dictionary<string, byte[]> _manifests = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, byte[]> _shards = new(StringComparer.Ordinal);
+        private int _deletedManifestCount;
+        private int _deletedShardCount;
+        private int _writtenManifestCount;
+        private int _readShardCount;
+        private int _statManifestCount;
+        private int _statShardCount;
+        private int _writtenShardCount;
+
+        public bool Enabled => true;
+
+        public bool FailManifestWrites { get; init; }
+
+        public bool FailShardWrites { get; set; }
+
+        public int WrittenShardCount => _writtenShardCount;
+
+        public int WrittenManifestCount => _writtenManifestCount;
+
+        public int ReadShardCount => _readShardCount;
+
+        public int StatShardCount => _statShardCount;
+
+        public int StatManifestCount => _statManifestCount;
+
+        public int DeletedShardCount => _deletedShardCount;
+
+        public int DeletedManifestCount => _deletedManifestCount;
+
+        public bool RemoveShard(XlShardManifest shard)
+        {
+            lock (_gate)
+            {
+                return _shards.Remove(Key(shard.DiskId, shard.RelativePath));
+            }
+        }
+
+        public bool HasShard(XlShardManifest shard)
+        {
+            lock (_gate)
+            {
+                return _shards.ContainsKey(Key(shard.DiskId, shard.RelativePath));
+            }
+        }
+
+        public bool RemoveManifest(string diskId, string relativePath)
+        {
+            lock (_gate)
+            {
+                return _manifests.Remove(Key(diskId, relativePath));
+            }
+        }
+
+        public bool HasManifest(string diskId, string relativePath)
+        {
+            lock (_gate)
+            {
+                return _manifests.ContainsKey(Key(diskId, relativePath));
+            }
+        }
+
+        public async Task<ClusterShardWriteResult> WriteShardAsync(
+            ClusterNodeInfo node,
+            string diskId,
+            string relativePath,
+            Stream content,
+            long expectedLength,
+            string expectedChecksumSha256,
+            CancellationToken cancellationToken)
+        {
+            if (FailShardWrites)
+            {
+                throw new MeansException(MeansErrorCodes.SlowDown, "Simulated shard replication failure.", 503);
+            }
+
+            using var buffer = new MemoryStream();
+            await content.CopyToAsync(buffer, cancellationToken);
+            var bytes = buffer.ToArray();
+            var checksum = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
+            Assert.Equal(expectedLength, bytes.Length);
+            Assert.Equal(expectedChecksumSha256, checksum);
+            lock (_gate)
+            {
+                _shards[Key(diskId, relativePath)] = bytes;
+                _writtenShardCount++;
+            }
+
+            return new ClusterShardWriteResult(diskId, relativePath, bytes.Length, checksum);
+        }
+
+        public Task<ClusterShardReadResult> OpenShardAsync(
+            ClusterNodeInfo node,
+            string diskId,
+            string relativePath,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            byte[] bytes;
+            lock (_gate)
+            {
+                if (!_shards.TryGetValue(Key(diskId, relativePath), out bytes!))
+                {
+                    throw new MeansException(MeansErrorCodes.NoSuchKey, "Shard not found.", 404);
+                }
+
+                _readShardCount++;
+            }
+
+            return Task.FromResult(new ClusterShardReadResult(
+                diskId,
+                relativePath,
+                bytes.Length,
+                new MemoryStream(bytes, writable: false)));
+        }
+
+        public Task<bool> DeleteShardAsync(
+            ClusterNodeInfo node,
+            string diskId,
+            string relativePath,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            lock (_gate)
+            {
+                var deleted = _shards.Remove(Key(diskId, relativePath));
+                if (deleted)
+                {
+                    _deletedShardCount++;
+                }
+
+                return Task.FromResult(deleted);
+            }
+        }
+
+        public Task<ClusterShardStatResult> StatShardAsync(
+            ClusterNodeInfo node,
+            string diskId,
+            string relativePath,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            byte[] bytes;
+            lock (_gate)
+            {
+                if (!_shards.TryGetValue(Key(diskId, relativePath), out bytes!))
+                {
+                    throw new MeansException(MeansErrorCodes.NoSuchKey, "Shard not found.", 404);
+                }
+
+                _statShardCount++;
+            }
+
+            return Task.FromResult(new ClusterShardStatResult(
+                diskId,
+                relativePath,
+                bytes.Length,
+                Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant()));
+        }
+
+        private static string Key(string diskId, string relativePath)
+        {
+            return diskId + "/" + relativePath.Replace('\\', '/');
+        }
+
+        public async Task<ClusterShardWriteResult> WriteManifestAsync(
+            ClusterNodeInfo node,
+            string diskId,
+            string relativePath,
+            Stream content,
+            long expectedLength,
+            string expectedChecksumSha256,
+            CancellationToken cancellationToken)
+        {
+            if (FailManifestWrites)
+            {
+                throw new MeansException(MeansErrorCodes.SlowDown, "Simulated manifest replication failure.", 503);
+            }
+
+            using var buffer = new MemoryStream();
+            await content.CopyToAsync(buffer, cancellationToken);
+            var bytes = buffer.ToArray();
+            var checksum = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
+            Assert.Equal(expectedLength, bytes.Length);
+            Assert.Equal(expectedChecksumSha256, checksum);
+            lock (_gate)
+            {
+                _manifests[Key(diskId, relativePath)] = bytes;
+                _writtenManifestCount++;
+            }
+
+            return new ClusterShardWriteResult(diskId, relativePath, bytes.Length, checksum);
+        }
+
+        public Task<ClusterShardReadResult> OpenManifestAsync(
+            ClusterNodeInfo node,
+            string diskId,
+            string relativePath,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            byte[] bytes;
+            lock (_gate)
+            {
+                if (!_manifests.TryGetValue(Key(diskId, relativePath), out bytes!))
+                {
+                    throw new MeansException(MeansErrorCodes.NoSuchKey, "Manifest not found.", 404);
+                }
+            }
+
+            return Task.FromResult(new ClusterShardReadResult(
+                diskId,
+                relativePath,
+                bytes.Length,
+                new MemoryStream(bytes, writable: false)));
+        }
+
+        public Task<bool> DeleteManifestAsync(
+            ClusterNodeInfo node,
+            string diskId,
+            string relativePath,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            lock (_gate)
+            {
+                var deleted = _manifests.Remove(Key(diskId, relativePath));
+                if (deleted)
+                {
+                    _deletedManifestCount++;
+                }
+
+                return Task.FromResult(deleted);
+            }
+        }
+
+        public Task<ClusterShardStatResult> StatManifestAsync(
+            ClusterNodeInfo node,
+            string diskId,
+            string relativePath,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            byte[] bytes;
+            lock (_gate)
+            {
+                _statManifestCount++;
+                if (!_manifests.TryGetValue(Key(diskId, relativePath), out bytes!))
+                {
+                    throw new MeansException(MeansErrorCodes.NoSuchKey, "Manifest not found.", 404);
+                }
+            }
+
+            return Task.FromResult(new ClusterShardStatResult(
+                diskId,
+                relativePath,
+                bytes.Length,
+                Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant()));
+        }
+    }
+
+    private sealed class DisabledClusterShardTransport : IClusterShardTransport
+    {
+        public bool Enabled => false;
+
+        public Task<ClusterShardWriteResult> WriteShardAsync(
+            ClusterNodeInfo node,
+            string diskId,
+            string relativePath,
+            Stream content,
+            long expectedLength,
+            string expectedChecksumSha256,
+            CancellationToken cancellationToken)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<ClusterShardReadResult> OpenShardAsync(
+            ClusterNodeInfo node,
+            string diskId,
+            string relativePath,
+            CancellationToken cancellationToken)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<bool> DeleteShardAsync(
+            ClusterNodeInfo node,
+            string diskId,
+            string relativePath,
+            CancellationToken cancellationToken)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<ClusterShardStatResult> StatShardAsync(
+            ClusterNodeInfo node,
+            string diskId,
+            string relativePath,
+            CancellationToken cancellationToken)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<ClusterShardWriteResult> WriteManifestAsync(
+            ClusterNodeInfo node,
+            string diskId,
+            string relativePath,
+            Stream content,
+            long expectedLength,
+            string expectedChecksumSha256,
+            CancellationToken cancellationToken)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<ClusterShardReadResult> OpenManifestAsync(
+            ClusterNodeInfo node,
+            string diskId,
+            string relativePath,
+            CancellationToken cancellationToken)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<bool> DeleteManifestAsync(
+            ClusterNodeInfo node,
+            string diskId,
+            string relativePath,
+            CancellationToken cancellationToken)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<ClusterShardStatResult> StatManifestAsync(
+            ClusterNodeInfo node,
+            string diskId,
+            string relativePath,
+            CancellationToken cancellationToken)
+        {
+            throw new NotSupportedException();
+        }
     }
 }

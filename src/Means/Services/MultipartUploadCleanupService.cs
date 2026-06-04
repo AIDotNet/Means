@@ -1,5 +1,5 @@
 using Means.Core;
-using Means.Infrastructure.SqliteFs;
+using Means.Infrastructure.XlFs;
 using Microsoft.Extensions.Options;
 
 namespace Means.Services;
@@ -11,14 +11,14 @@ namespace Means.Services;
 public sealed class MultipartUploadCleanupService : BackgroundService
 {
     private readonly IStorageMaintenanceOperations _store;
-    private readonly IOptions<SqliteFsOptions> _options;
+    private readonly IOptions<XlFsOptions> _options;
     private readonly IBackgroundTaskRegistry _backgroundTasks;
     private readonly ILogger<MultipartUploadCleanupService> _logger;
     private readonly BackgroundTaskDescriptor _task;
 
     public MultipartUploadCleanupService(
         IStorageMaintenanceOperations store,
-        IOptions<SqliteFsOptions> options,
+        IOptions<XlFsOptions> options,
         IBackgroundTaskRegistry backgroundTasks,
         ILogger<MultipartUploadCleanupService> logger)
     {

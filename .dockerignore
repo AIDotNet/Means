@@ -8,6 +8,8 @@
 **/.vs
 **/.vscode
 **/.idea
+**/.next
+**/.tmp-*
 **/*.*proj.user
 **/*.dbmdl
 **/*.jfm

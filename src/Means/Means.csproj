@@ -9,10 +9,18 @@
         <EnableRequestDelegateGenerator>true</EnableRequestDelegateGenerator>
         <EnableConfigurationBindingGenerator>true</EnableConfigurationBindingGenerator>
         <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+        <InvariantGlobalization>true</InvariantGlobalization>
+        <OptimizationPreference>Size</OptimizationPreference>
+        <IlcOptimizationPreference>Size</IlcOptimizationPreference>
+        <StackTraceSupport>false</StackTraceSupport>
+        <EventSourceSupport>false</EventSourceSupport>
+        <MetadataUpdaterSupport>false</MetadataUpdaterSupport>
+        <UseSystemResourceKeys>true</UseSystemResourceKeys>
+        <EnableMeansOpenTelemetry Condition="'$(EnableMeansOpenTelemetry)' == ''">false</EnableMeansOpenTelemetry>
+        <DefineConstants Condition="'$(EnableMeansOpenTelemetry)' == 'true'">$(DefineConstants);MEANS_OPENTELEMETRY</DefineConstants>
     </PropertyGroup>
 
-    <ItemGroup>
-        <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.2" />
+    <ItemGroup Condition="'$(EnableMeansOpenTelemetry)' == 'true'">
         <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.3" />
         <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.15.3" />
         <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.15.2" />
@@ -20,7 +28,6 @@
 
     <ItemGroup>
         <ProjectReference Include="..\Means.Core\Means.Core.csproj" />
-        <ProjectReference Include="..\Means.Infrastructure.SqliteFs\Means.Infrastructure.SqliteFs.csproj" />
         <ProjectReference Include="..\Means.Infrastructure.XlFs\Means.Infrastructure.XlFs.csproj" />
         <ProjectReference Include="..\Means.Protocol.S3\Means.Protocol.S3.csproj" />
     </ItemGroup>

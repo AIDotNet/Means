@@ -15,4 +15,3 @@ HEAD、GET、LIST 只读取已提交的 current object pointer。覆盖写使用
 
 ## 快照与恢复
 
-`CreateMetadataSnapshotAsync` 可导出当前索引快照，`RestoreMetadataSnapshotAsync` 用快照替换当前索引并重建 WAL。legacy SQLite backend 仍使用 SQLite backup/restore。

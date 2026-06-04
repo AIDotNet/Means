@@ -6,7 +6,6 @@
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/Means.Core/Means.Core.csproj" />
-    <Project Path="src/Means.Infrastructure.SqliteFs/Means.Infrastructure.SqliteFs.csproj" />
     <Project Path="src/Means.Infrastructure.XlFs/Means.Infrastructure.XlFs.csproj" />
     <Project Path="src/Means.Protocol.S3/Means.Protocol.S3.csproj" />
     <Project Path="src/Means/Means.csproj" />
