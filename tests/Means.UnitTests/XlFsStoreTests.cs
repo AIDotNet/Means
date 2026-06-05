@@ -38,6 +38,29 @@ public sealed class XlFsStoreTests
     }
 
     [Fact]
+    public async Task LogDbOpenReportsWhenWalIsAlreadyInUse()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            Directory.CreateDirectory(root);
+            var walPath = Path.Combine(root, "current.wal");
+            await File.WriteAllBytesAsync(walPath, [], CancellationToken.None);
+
+            await using var lockStream = new FileStream(walPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+
+            var ex = await Assert.ThrowsAsync<IOException>(() => MeansLogDb.OpenAsync(root, CancellationToken.None));
+
+            Assert.Contains(root, ex.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("Another Means process may already be using", ex.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DeleteTempRoot(root);
+        }
+    }
+
+    [Fact]
     public async Task LogDbReplaysLegacyJsonWal()
     {
         var root = CreateTempRoot();

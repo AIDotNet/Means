@@ -34,10 +34,25 @@ public sealed partial class MeansLogDb : IAsyncDisposable
     {
         Directory.CreateDirectory(rootPath);
         var db = new MeansLogDb(rootPath, syncMode);
-        await db.ReplayAsync(cancellationToken);
-        db._wal = new FileStream(db._walPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
-        db._wal.Seek(0, SeekOrigin.End);
-        return db;
+        try
+        {
+            await db.ReplayAsync(cancellationToken);
+            db._wal = new FileStream(db._walPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            db._wal.Seek(0, SeekOrigin.End);
+            return db;
+        }
+        catch (IOException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            await db.DisposeAsync();
+            throw new IOException(
+                $"Failed to open metadata WAL at '{db._walPath}'. Another Means process may already be using '{rootPath}'. Each node needs its own local storage directory.",
+                ex);
+        }
+        catch
+        {
+            await db.DisposeAsync();
+            throw;
+        }
     }
 
     public ValueTask DisposeAsync()

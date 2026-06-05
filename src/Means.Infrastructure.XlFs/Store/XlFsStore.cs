@@ -54,6 +54,11 @@ public sealed partial class XlFsStore : IObjectStore,
         _initLock.Dispose();
     }
 
+    public Task InitializeAsync(CancellationToken cancellationToken)
+    {
+        return EnsureInitializedAsync(cancellationToken);
+    }
+
     private async Task EnsureInitializedAsync(CancellationToken cancellationToken)
     {
         if (_initialized)

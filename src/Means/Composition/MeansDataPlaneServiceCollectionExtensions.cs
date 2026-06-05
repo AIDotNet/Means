@@ -59,6 +59,7 @@ public static class MeansDataPlaneServiceCollectionExtensions
         services.AddSingleton<BucketPolicyEvaluator>();
         services.AddSingleton<SigV4RequestVerifier>();
         services.AddSingleton<SystemSettingsService>();
+        services.AddHostedService<MetadataStoreWarmupService>();
         services.AddHostedService<LocalClusterNodeHeartbeatService>();
         services.AddHostedService<DiskHealthIsolationService>();
         services.AddHostedService<ReplicaRepairService>();
