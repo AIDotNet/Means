@@ -34,13 +34,22 @@ npm install
 npm run check:s3
 ```
 
-The check uses the official AWS SDK for JavaScript v3 with `forcePathStyle: true`. It runs `ListBuckets` and, when `MEANS_BUCKET` is set, `HeadBucket`. This is useful for multi-node or load-balanced deployments because it catches the most common issues early: pointing at the console API instead of the S3 data plane, forgetting the `/s3/` path prefix, mismatched signing region, or using credentials from the wrong environment.
+The check uses the official AWS SDK for JavaScript v3 with `forcePathStyle: true`. It runs `ListBuckets` and, when `MEANS_BUCKET` is set, `HeadBucket` plus a presigned GET URL shape check for `MEANS_PRESIGN_KEY` (default `sdk-preflight.txt`). The URL is generated but not fetched. This is useful for multi-node or load-balanced deployments because it catches the most common issues early: pointing at the console API instead of the S3 data plane, forgetting the `/s3/` path prefix, mismatched signing region, generating presigned URLs with a private node origin, or using credentials from the wrong environment.
 
 The C# AWS SDK example has the same read-only preflight mode:
 
 ```bash
 dotnet run --project SDKs/examples/csharp-aws-sdk/Means.AwsSdkExamples.csproj -- check
 ```
+
+## Multi-node and load-balanced checklist
+
+- Point SDK traffic at the stable public S3 data-plane VIP or load balancer, not an internal cluster shard endpoint.
+- Keep path-style addressing enabled unless bucket DNS and TLS are configured for virtual-hosted-style requests.
+- Include `/s3/` or any reverse-proxy path prefix in `MEANS_ENDPOINT`; presigners must use the same externally reachable host and path.
+- Use one signing region consistently across clients and presigners, commonly `us-east-1`.
+- Preserve `Host`, path, method, query string, and URL encoding through reverse proxies because SigV4 signs those values.
+- Run `npm run check:s3` or the C# `-- check` mode before write-heavy examples in a new deployment.
 
 ## Run the C# example
 

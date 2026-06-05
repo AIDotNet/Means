@@ -209,6 +209,67 @@ public sealed partial class XlFsStore : IObjectStore,
 
     private TimeSpan RepairThrottleDelay => TimeSpan.FromMilliseconds(Math.Clamp(_options.ReplicaRepairThrottleDelayMilliseconds, 0, 60_000));
 
+    private int ShardTransferMaxConcurrency => Math.Clamp(_options.ShardTransferMaxConcurrency, 1, 64);
+
+    private long DiskMinAvailableBytesAfterWrite => Math.Max(0, _options.DiskMinAvailableBytesAfterWrite);
+
+    private double DiskMinAvailableRatioAfterWrite => Math.Clamp(_options.DiskMinAvailablePercentAfterWrite, 0, 95) / 100d;
+
+    private int PlacementMinFaultDomains(int replicaCount)
+    {
+        return Math.Clamp(_options.PlacementMinFaultDomains, 0, Math.Max(1, replicaCount));
+    }
+
+    private ObjectPlacementRequest CreatePlacementRequest(
+        string bucketName,
+        string objectKey,
+        string? versionId,
+        int replicaCount,
+        long contentLength,
+        string? poolId = null)
+    {
+        return new ObjectPlacementRequest(
+            bucketName,
+            objectKey,
+            versionId,
+            replicaCount,
+            contentLength,
+            poolId,
+            DiskMinAvailableBytesAfterWrite,
+            DiskMinAvailableRatioAfterWrite,
+            PlacementMinFaultDomains(replicaCount));
+    }
+
+    private void RefreshLocalDiskCapacity()
+    {
+        if (_disks.Count == 0)
+        {
+            return;
+        }
+
+        _disks = _disks.Select(disk =>
+        {
+            try
+            {
+                var drive = DriveInfoFor(disk.RootPath);
+                return disk with
+                {
+                    TotalBytes = Math.Max(0, drive.TotalSize),
+                    AvailableBytes = Math.Max(0, drive.AvailableFreeSpace)
+                };
+            }
+            catch
+            {
+                return disk with
+                {
+                    Online = false,
+                    TotalBytes = 0,
+                    AvailableBytes = 0
+                };
+            }
+        }).ToArray();
+    }
+
     private static XlHealRecord DeserializeHealRecord(byte[] value, DateTimeOffset fallbackTimestamp)
     {
         using var document = JsonDocument.Parse(value);

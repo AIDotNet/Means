@@ -235,7 +235,10 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
         {
             InternalTransport = new ClusterInternalTransportDiagnostics(
                 !string.IsNullOrWhiteSpace(configuredCluster.InternalAuthToken),
-                Math.Max(0, configuredCluster.MaxShardTransferBytes)),
+                Math.Max(0, configuredCluster.MaxShardTransferBytes),
+                Math.Clamp(configuredCluster.ShardRpcMaxConnectionsPerNode, 1, 1024),
+                Math.Clamp(configuredCluster.ShardRpcRequestTimeoutSeconds, 5, 86_400),
+                Math.Clamp(configuredCluster.ShardRpcPooledConnectionLifetimeSeconds, 30, 86_400)),
             BackgroundTasks = backgroundTasks.ListTasks()
         };
         await AppendAuditAsync(

@@ -60,8 +60,21 @@
       "cluster": "集群",
       "health": "健康"
     },
+    "navDescriptions": {
+      "accessKeys": "S3 认证凭据",
+      "audit": "操作与资源变更",
+      "buckets": "对象、策略与版本",
+      "cluster": "拓扑、池与维护",
+      "dashboard": "容量与请求概览",
+      "health": "节点、磁盘与修复",
+      "settings": "端点、限制与存储"
+    },
     "product": {
-      "subtitle": "对象存储控制台"
+      "subtitle": "对象存储控制台",
+      "workspace": "管理工作区"
+    },
+    "routeDescriptions": {
+      "bucket": "对象、策略、版本与桶设置"
     },
     "search": {
       "open": "打开搜索",
@@ -74,6 +87,13 @@
       "governance": "治理",
       "overview": "概览",
       "storage": "存储"
+    },
+    "system": {
+      "erasureCoding": "纠删码",
+      "localMetadata": "本地元数据",
+      "online": "在线",
+      "runtime": "运行态",
+      "s3Api": "S3 API"
     },
     "userMenu": {
       "currentUser": "当前用户",
@@ -298,6 +318,7 @@
   "commandSearch": {
     "bucketDescription": "{{count}} 个对象",
     "description": "快速跳转到页面或对象桶。",
+    "empty": "没有匹配的页面或桶",
     "emptyBuckets": "没有匹配的桶",
     "emptyPages": "没有匹配的页面",
     "inputPlaceholder": "输入页面、桶或关键词",
@@ -493,8 +514,8 @@
     "sections": {
       "architecture": {
         "currentMode": "当前运行模式是 XlFs + 自研 MeansLogDb 元数据引擎。",
-        "futureAbstraction": "server pool、erasure set、healing/scrub 是后续分布式演进抽象。",
-        "title": "架构预留"
+        "futureAbstraction": "对象放置已约束在单个 server pool 内；erasure set 故障域和更深层 healing 策略继续演进。",
+        "title": "分布式布局"
       },
       "compression": {
         "badges": {
@@ -612,9 +633,24 @@
         "detail": "{{nodes}} 个节点和 {{disks}} 块磁盘在线",
         "degraded": "{{nodes}} 个节点和 {{disks}} 块磁盘离线"
       },
+      "metadata": {
+        "title": "元数据",
+        "detail": "{{mode}} WAL，{{keys}} 个键，{{wal}} 日志",
+        "risk": "{{mode}} 本地元数据；多节点入口存在可见性风险"
+      },
+      "capacity": {
+        "title": "容量准入",
+        "enabled": "{{writable}} 块磁盘可写，{{low}} 块低水位；最大可写 {{largest}}",
+        "disabled": "未配置写后保留容量水位"
+      },
+      "placement": {
+        "title": "放置策略",
+        "strict": "要求 {{required}} 个故障域；当前 {{writable}} 个可写，{{pools}} 个池满足",
+        "preferred": "{{writable}} 个可写故障域，{{pools}} 个池可放置"
+      },
       "transport": {
         "title": "Shard RPC",
-        "enabled": "内部 shard 端点已配置，单次传输上限 {{limit}}",
+        "enabled": "内部 shard 端点已配置，单次 {{limit}}，每节点 {{connections}} 个连接，{{timeout}}s 超时，{{lifetime}}s 连接生命周期",
         "disabled": "配置内部集群 token 后才能接收 shard 传输"
       },
       "erasureCoding": {
@@ -639,6 +675,7 @@
       "enabled": "已启用",
       "disabled": "已关闭",
       "maxTransfer": "最大 shard 传输 {{value}}",
+      "rpcPolicy": "最大传输 {{transfer}}；每节点 {{connections}} 个连接；请求超时 {{timeout}}s；连接生命周期 {{lifetime}}s",
       "erasureCoding": "纠删码",
       "ecProfiles": "{{enabled}} / {{total}} 已启用",
       "ecDetail": "当前写入使用本地 XlFs 磁盘上的 Reed-Solomon 分片。",
@@ -648,6 +685,32 @@
       "routing": "S3 路由",
       "pending": "待完成",
       "routingDetail": "放置策略具备跨节点感知前，不要启用生产负载均衡。"
+    },
+    "maintenance": {
+      "title": "维护操作",
+      "loading": "正在加载维护任务...",
+      "empty": "暂无注册的维护任务",
+      "value": "{{running}} 个运行中 / {{failed}} 个失败",
+      "none": "-",
+      "signals": {
+        "repairQueue": "修复队列",
+        "pendingFailed": "{{pending}} 个待处理 / {{failed}} 个失败",
+        "repairQueueDetail": "{{total}} 条队列记录，{{retryable}} 个可重试失败",
+        "rebalance": "均衡迁移",
+        "noRun": "暂无运行记录",
+        "lastCompleted": "上次完成 {{value}}",
+        "rebalanceDetail": "按当前放置计划迁移对象分片。",
+        "background": "后台任务",
+        "taskMix": "{{repair}} 个修复任务 / {{total}} 个维护任务",
+        "taskDetail": "{{success}} 次成功运行，{{failure}} 次失败运行"
+      },
+      "columns": {
+        "task": "任务",
+        "status": "状态",
+        "result": "最近结果",
+        "lastRun": "最近运行",
+        "action": "操作"
+      }
     },
     "topologyMap": {
       "title": "拓扑图",
@@ -665,6 +728,7 @@
       "empty": "暂无已注册节点",
       "columns": {
         "node": "节点",
+        "faultDomain": "故障域",
         "endpoint": "Endpoint",
         "disks": "磁盘",
         "lastHeartbeat": "最近心跳",
@@ -715,6 +779,8 @@
       "onlineOffline": "{{online}} 在线 / {{offline}} 离线",
       "replicas": "副本",
       "missingReplicaFiles": "缺失副本文件",
+      "recoverableDegraded": "{{count}} 个可恢复降级",
+      "unrecoverableObjects": "{{count}} 个不可恢复",
       "repairQueue": "修复队列",
       "failedRepairs": "{{count}} 个失败修复"
     },
@@ -737,6 +803,12 @@
       "replicaTitle": "副本完整性",
       "desiredReplicas": "目标副本数",
       "replicaRecords": "副本记录",
+      "degraded": "降级对象",
+      "recoverableDegraded": "可恢复降级",
+      "unrecoverable": "不可恢复",
+      "readQuorumLost": "读 quorum 丢失",
+      "writeQuorumLost": "写 quorum 丢失",
+      "missingReplicaFiles": "缺失文件",
       "underReplicated": "欠副本",
       "withoutManifest": "缺失清单",
       "repairTitle": "修复队列",
@@ -749,6 +821,17 @@
       "oldestPending": "最早待处理",
       "lastUpdated": "最近更新",
       "none": "-",
+      "yes": "是",
+      "no": "否",
+      "metadataTitle": "元数据",
+      "metaSyncMode": "WAL 同步",
+      "durableWrites": "持久写入",
+      "sharedNamespace": "共享命名空间",
+      "multiNodeWriteRisk": "多节点写入风险",
+      "pendingCommits": "待提交",
+      "orphanedReplicaRecords": "孤儿副本记录",
+      "walBytes": "WAL 大小",
+      "keyCount": "键数量",
       "ecTitle": "纠删码",
       "ecProfiles": "Profile",
       "ecEnabled": "已启用",

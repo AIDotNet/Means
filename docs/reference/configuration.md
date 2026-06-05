@@ -25,6 +25,9 @@ SDK endpoint 应指向数据面。例如同源 alias 部署时使用 `https://ho
 | `Means:Storage:MetaSyncMode` | `Always` | MeansLogDb WAL flush 策略 |
 | `Means:Storage:ReplicaCount` | `1` | 期望副本数 |
 | `Means:Storage:VerifyChecksumOnRead` | `false` | GET 读路径是否同步校验 SHA-256 |
+| `Means:Storage:DiskMinAvailableBytesAfterWrite` | `1073741824` | 单个 shard/replica 写入后目标磁盘至少保留的可用字节数 |
+| `Means:Storage:DiskMinAvailablePercentAfterWrite` | `0` | 单个 shard/replica 写入后目标磁盘至少保留的可用容量百分比，运行时会限制在 `0..95` |
+| `Means:Storage:PlacementMinFaultDomains` | `0` | 单个对象放置要求覆盖的最小故障域数量；`0` 表示只偏好跨故障域，不强制 |
 | `Means:Storage:HotObjectCacheMaxBytes` | `67108864` | 热点小对象缓存总预算 |
 | `Means:Storage:HotObjectCacheMaxObjectBytes` | `1048576` | 单个可缓存对象上限 |
 | `Means:Storage:DefaultAccessKey` | `meansadmin` | 初始 S3 access key |
@@ -62,6 +65,7 @@ SDK endpoint 应指向数据面。例如同源 alias 部署时使用 `https://ho
 | `Means:Cluster:ClusterName` | `Local Means Cluster` | 集群显示名 |
 | `Means:Cluster:NodeId` | 空 | 节点 ID，空时服务生成 |
 | `Means:Cluster:NodeEndpoint` | `http://localhost` | 节点对外端点 |
+| `Means:Cluster:FaultDomain` | 空 | 节点故障域，如 rack/zone；空时使用 NodeId |
 | `Means:Cluster:PoolId` | `pool-1` | 存储池 ID |
 | `Means:Cluster:PoolName` | `Pool 1` | 存储池显示名 |
 | `Means:Cluster:ObjectDiskId` | `local-objects` | 单对象盘 ID |
@@ -71,6 +75,9 @@ SDK endpoint 应指向数据面。例如同源 alias 部署时使用 `https://ho
 | `Means:Cluster:DiskHealthIntervalSeconds` | `30` | 磁盘健康检查周期 |
 | `Means:Cluster:InternalAuthToken` | 空 | 内部节点间 shard RPC token；为空时 `/api/internal/cluster` 关闭并返回 404 |
 | `Means:Cluster:MaxShardTransferBytes` | `5368709120` | 单个内部 shard 流式 PUT 上限 |
+| `Means:Cluster:ShardRpcMaxConnectionsPerNode` | `64` | 每个远端节点的 outbound shard RPC 连接上限，运行时会限制在 `1..1024` |
+| `Means:Cluster:ShardRpcRequestTimeoutSeconds` | `600` | 单个 shard RPC 请求超时秒数，运行时会限制在 `5..86400` |
+| `Means:Cluster:ShardRpcPooledConnectionLifetimeSeconds` | `300` | outbound shard RPC 连接池连接生命周期秒数，运行时会限制在 `30..86400` |
 
 ## 请求限制与限流
 

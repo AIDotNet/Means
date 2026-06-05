@@ -45,7 +45,8 @@ public sealed partial class XlFsStore
                 ? existingNode.RegisteredAt
                 : registeredAt,
             registeredAt,
-            disks);
+            disks,
+            NormalizeFaultDomain(registration.FaultDomain, registration.NodeId));
         var existingPool = await Db.GetJsonAsync<XlStoragePoolRecord>(Keys.ClusterPool(registration.ClusterId, registration.PoolId), cancellationToken);
         var pool = new XlStoragePoolRecord(
             registration.PoolId,
@@ -101,6 +102,7 @@ public sealed partial class XlFsStore
         CancellationToken cancellationToken)
     {
         await EnsureInitializedAsync(cancellationToken);
+        RefreshLocalDiskCapacity();
         var cluster = await Db.GetJsonAsync<StorageClusterInfo>(Keys.ClusterInfo, cancellationToken);
         var nodeRows = await Db.ScanPrefixAsync(Keys.ClusterNodePrefix, 100_000, null, cancellationToken);
         var nodes = nodeRows.Select(row => Deserialize<ClusterNodeInfo>(row.Value))
@@ -580,10 +582,671 @@ public sealed partial class XlFsStore
         return TimeSpan.FromSeconds(Math.Min(900, 15 * (1 << exponent)));
     }
 
-    public Task<int> RebalanceObjectReplicasAsync(int maxItems, CancellationToken cancellationToken)
+    public async Task<int> RebalanceObjectReplicasAsync(int maxItems, CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(0);
+        await EnsureInitializedAsync(cancellationToken);
+        var batchLimit = Math.Clamp(maxItems, 1, 10_000);
+        var topology = await GetClusterTopologyAsync(
+            DateTimeOffset.UtcNow.Subtract(TimeSpan.FromSeconds(60)),
+            cancellationToken);
+        var rows = await Db.ScanPrefixAsync(Keys.CurrentObjectGlobalPrefix, batchLimit, null, cancellationToken);
+        var migrated = 0;
+
+        foreach (var row in rows)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var record = Deserialize<XlObjectRecord>(row.Value);
+            if (record.IsDeleteMarker)
+            {
+                continue;
+            }
+
+            try
+            {
+                var manifest = await TryReadManifestAsync(record, cancellationToken);
+                if (manifest is null || manifest.Parts.Count == 0)
+                {
+                    continue;
+                }
+
+                var rebalanced = IsReedSolomonErasure(manifest)
+                    ? await TryRebalanceReedSolomonObjectAsync(record, manifest, topology, cancellationToken)
+                    : await TryRebalanceFullCopyObjectAsync(record, manifest, topology, cancellationToken);
+                if (rebalanced)
+                {
+                    migrated++;
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch
+            {
+            }
+        }
+
+        return migrated;
+    }
+
+    private async Task<bool> TryRebalanceReedSolomonObjectAsync(
+        XlObjectRecord record,
+        XlObjectManifest manifest,
+        ClusterTopology topology,
+        CancellationToken cancellationToken)
+    {
+        var totalShards = manifest.Erasure.DataShards + manifest.Erasure.ParityShards;
+        if (totalShards <= 0 || manifest.Parts.Any(part => part.Shards.Count == 0))
+        {
+            return false;
+        }
+
+        var plannedTargets = TryPlanRebalanceTargets(
+            record.BucketName,
+            record.ObjectId,
+            record.ObjectId,
+            totalShards,
+            manifest.Parts.Max(part => part.Shards.Max(shard => shard.Size)),
+            topology);
+        if (plannedTargets is null || plannedTargets.Count != totalShards)
+        {
+            return false;
+        }
+
+        var oldLocations = manifest.Parts
+            .SelectMany(part => part.Shards)
+            .Select(ShardLocationKey)
+            .ToHashSet(StringComparer.Ordinal);
+        var stagedNewShards = new List<XlShardManifest>();
+        var wroteShard = false;
+        var updatedParts = new List<XlPartManifest>(manifest.Parts.Count);
+        try
+        {
+            foreach (var part in manifest.Parts)
+            {
+                var existingByIndex = part.Shards
+                    .GroupBy(shard => shard.SetIndex)
+                    .ToDictionary(group => group.Key, group => group.First());
+                var updatedShards = new List<XlShardManifest>(totalShards);
+                for (var shardIndex = 0; shardIndex < totalShards; shardIndex++)
+                {
+                    if (!existingByIndex.TryGetValue(shardIndex, out var sourceShard))
+                    {
+                        await RollbackRebalanceAsync(stagedNewShards, manifest, CancellationToken.None);
+                        return false;
+                    }
+
+                    var target = plannedTargets[shardIndex];
+                    var targetShard = new XlShardManifest(
+                        target.DiskId,
+                        shardIndex,
+                        ObjectShardRelativePath(record.BucketName, record.ObjectId, shardIndex),
+                        sourceShard.Size,
+                        sourceShard.ChecksumSha256);
+                    var targetProbe = await ProbeShardAsync(targetShard, verifyChecksum: true, cancellationToken);
+                    if (targetProbe.Status == ShardProbeStatus.Available)
+                    {
+                        updatedShards.Add(targetShard);
+                        continue;
+                    }
+
+                    var copied = false;
+                    var sourceProbe = await ProbeShardAsync(sourceShard, verifyChecksum: true, cancellationToken);
+                    if (sourceProbe.Status == ShardProbeStatus.Available)
+                    {
+                        copied = await TryCopyShardToTargetAsync(sourceShard, targetShard, cancellationToken);
+                    }
+
+                    if (!copied
+                        && !await TryRepairReedSolomonShardAsync(manifest.Erasure, part, targetShard, cancellationToken))
+                    {
+                        await RollbackRebalanceAsync(stagedNewShards, manifest, CancellationToken.None);
+                        return false;
+                    }
+
+                    wroteShard = true;
+                    if (!oldLocations.Contains(ShardLocationKey(targetShard)))
+                    {
+                        stagedNewShards.Add(targetShard);
+                    }
+
+                    updatedShards.Add(targetShard);
+                }
+
+                if (updatedShards.Count < manifest.Erasure.WriteQuorum
+                    || !CanRecoverErasureData(manifest.Erasure.DataShards, updatedShards.Select(shard => shard.SetIndex)))
+                {
+                    await RollbackRebalanceAsync(stagedNewShards, manifest, CancellationToken.None);
+                    return false;
+                }
+
+                updatedParts.Add(part with { Shards = updatedShards.OrderBy(shard => shard.SetIndex).ToArray() });
+            }
+
+            var updatedManifest = manifest with { Parts = updatedParts };
+            var changed = wroteShard || !ManifestShardLocationsEqual(manifest, updatedManifest);
+            if (!changed)
+            {
+                return false;
+            }
+
+            await WriteManifestCopiesAsync(
+                record.BucketName,
+                record.ObjectId,
+                updatedManifest,
+                updatedParts.SelectMany(part => part.Shards).ToArray(),
+                cancellationToken);
+            await DeleteSupersededObjectFilesAsync(manifest, updatedManifest, cancellationToken);
+            return true;
+        }
+        catch
+        {
+            await RollbackRebalanceAsync(stagedNewShards, manifest, CancellationToken.None);
+            throw;
+        }
+    }
+
+    private async Task<bool> TryRebalanceFullCopyObjectAsync(
+        XlObjectRecord record,
+        XlObjectManifest manifest,
+        ClusterTopology topology,
+        CancellationToken cancellationToken)
+    {
+        var onlineDiskCount = topology.Nodes
+            .Where(node => string.Equals(node.Status, ClusterNodeStatuses.Online, StringComparison.Ordinal))
+            .SelectMany(node => node.Disks)
+            .Count(disk => string.Equals(disk.Status, StorageDiskStatuses.Online, StringComparison.Ordinal));
+        if (onlineDiskCount <= 0)
+        {
+            return false;
+        }
+
+        var oldLocations = manifest.Parts
+            .SelectMany(part => part.Shards)
+            .Select(ShardLocationKey)
+            .ToHashSet(StringComparer.Ordinal);
+        var stagedNewShards = new List<XlShardManifest>();
+        var wroteShard = false;
+        var updatedParts = new List<XlPartManifest>(manifest.Parts.Count);
+        try
+        {
+            foreach (var part in manifest.Parts)
+            {
+                var desiredReplicas = Math.Min(
+                    Math.Min(onlineDiskCount, 16),
+                    Math.Max(Math.Max(1, manifest.Erasure.WriteQuorum), part.Shards.Count));
+                if (desiredReplicas < Math.Max(1, manifest.Erasure.WriteQuorum))
+                {
+                    await RollbackRebalanceAsync(stagedNewShards, manifest, CancellationToken.None);
+                    return false;
+                }
+
+                var plannedTargets = TryPlanRebalanceTargets(
+                    record.BucketName,
+                    record.Key,
+                    record.VersionId,
+                    desiredReplicas,
+                    part.Size,
+                    topology);
+                if (plannedTargets is null || plannedTargets.Count != desiredReplicas)
+                {
+                    await RollbackRebalanceAsync(stagedNewShards, manifest, CancellationToken.None);
+                    return false;
+                }
+
+                var existingByDisk = part.Shards
+                    .GroupBy(shard => shard.DiskId, StringComparer.Ordinal)
+                    .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+                var source = await TryResolveFullCopyRebalanceSourceAsync(part, cancellationToken);
+                if (source is null)
+                {
+                    await RollbackRebalanceAsync(stagedNewShards, manifest, CancellationToken.None);
+                    return false;
+                }
+
+                try
+                {
+                    var updatedShards = new List<XlShardManifest>(desiredReplicas);
+                    for (var replicaIndex = 0; replicaIndex < plannedTargets.Count; replicaIndex++)
+                    {
+                        var target = plannedTargets[replicaIndex];
+                        if (existingByDisk.TryGetValue(target.DiskId, out var existing))
+                        {
+                            var probe = await ProbeShardAsync(existing, verifyChecksum: true, cancellationToken);
+                            if (probe.Status == ShardProbeStatus.Available)
+                            {
+                                updatedShards.Add(existing with { SetIndex = replicaIndex });
+                                continue;
+                            }
+                        }
+
+                        var relativePath = existingByDisk.TryGetValue(target.DiskId, out var reusable)
+                            ? reusable.RelativePath
+                            : source.Shard.RelativePath;
+                        var targetShard = new XlShardManifest(
+                            target.DiskId,
+                            replicaIndex,
+                            relativePath,
+                            part.Size,
+                            part.ChecksumSha256);
+                        var targetProbe = await ProbeShardAsync(targetShard, verifyChecksum: true, cancellationToken);
+                        if (targetProbe.Status != ShardProbeStatus.Available)
+                        {
+                            await CommitCopiedShardToTargetAsync(source.Path, targetShard, cancellationToken);
+                            wroteShard = true;
+                            if (!oldLocations.Contains(ShardLocationKey(targetShard)))
+                            {
+                                stagedNewShards.Add(targetShard);
+                            }
+                        }
+
+                        updatedShards.Add(targetShard);
+                    }
+
+                    if (updatedShards.Count < Math.Max(1, manifest.Erasure.WriteQuorum))
+                    {
+                        await RollbackRebalanceAsync(stagedNewShards, manifest, CancellationToken.None);
+                        return false;
+                    }
+
+                    updatedParts.Add(part with { Shards = updatedShards.OrderBy(shard => shard.SetIndex).ToArray() });
+                }
+                finally
+                {
+                    if (source.DeleteOnDispose)
+                    {
+                        DeleteFileQuietly(source.Path);
+                    }
+                }
+            }
+
+            var updatedManifest = manifest with { Parts = updatedParts };
+            var changed = wroteShard || !ManifestShardLocationsEqual(manifest, updatedManifest);
+            if (!changed)
+            {
+                return false;
+            }
+
+            await WriteManifestCopiesAsync(
+                record.BucketName,
+                record.ObjectId,
+                updatedManifest,
+                updatedParts.SelectMany(part => part.Shards).ToArray(),
+                cancellationToken);
+            await DeleteSupersededObjectFilesAsync(manifest, updatedManifest, cancellationToken);
+            return true;
+        }
+        catch
+        {
+            await RollbackRebalanceAsync(stagedNewShards, manifest, CancellationToken.None);
+            throw;
+        }
+    }
+
+    private IReadOnlyList<ShardWriteTarget>? TryPlanRebalanceTargets(
+        string bucketName,
+        string objectKey,
+        string? versionId,
+        int replicaCount,
+        long contentLength,
+        ClusterTopology topology)
+    {
+        try
+        {
+            var plan = _placementPlanner.PlanPlacement(
+                CreatePlacementRequest(
+                    bucketName,
+                    objectKey,
+                    versionId,
+                    replicaCount,
+                    contentLength),
+                topology);
+            var nodesById = topology.Nodes.ToDictionary(node => node.NodeId, StringComparer.Ordinal);
+            var selectedDisks = new HashSet<string>(StringComparer.Ordinal);
+            var targets = new List<ShardWriteTarget>(replicaCount);
+            foreach (var replica in plan.Replicas.OrderBy(replica => replica.ReplicaIndex))
+            {
+                if (!selectedDisks.Add(replica.DiskId))
+                {
+                    return null;
+                }
+
+                var localDisk = _disks.FirstOrDefault(disk => string.Equals(disk.DiskId, replica.DiskId, StringComparison.Ordinal));
+                if (localDisk is not null)
+                {
+                    if (!localDisk.Online)
+                    {
+                        return null;
+                    }
+
+                    targets.Add(new ShardWriteTarget(replica.DiskId, localDisk, null));
+                    continue;
+                }
+
+                if (!_shardTransport.Enabled
+                    || !nodesById.TryGetValue(replica.NodeId, out var node)
+                    || !string.Equals(node.Status, ClusterNodeStatuses.Online, StringComparison.Ordinal))
+                {
+                    return null;
+                }
+
+                var remoteDisk = node.Disks.FirstOrDefault(disk =>
+                    string.Equals(disk.DiskId, replica.DiskId, StringComparison.Ordinal)
+                    && string.Equals(disk.Status, StorageDiskStatuses.Online, StringComparison.Ordinal));
+                if (remoteDisk is null)
+                {
+                    return null;
+                }
+
+                targets.Add(new ShardWriteTarget(replica.DiskId, null, node));
+            }
+
+            return targets.Count == replicaCount ? targets : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private async Task<ResolvedRebalanceShard?> TryResolveFullCopyRebalanceSourceAsync(
+        XlPartManifest part,
+        CancellationToken cancellationToken)
+    {
+        foreach (var shard in part.Shards.OrderBy(shard => shard.SetIndex))
+        {
+            var source = await TryResolveVerifiedRebalanceSourceAsync(shard, cancellationToken);
+            if (source is not null)
+            {
+                return source;
+            }
+        }
+
+        return null;
+    }
+
+    private async Task<bool> TryCopyShardToTargetAsync(
+        XlShardManifest sourceShard,
+        XlShardManifest targetShard,
+        CancellationToken cancellationToken)
+    {
+        var source = await TryResolveVerifiedRebalanceSourceAsync(sourceShard, cancellationToken);
+        if (source is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            await CommitCopiedShardToTargetAsync(source.Path, targetShard, cancellationToken);
+            return true;
+        }
+        finally
+        {
+            if (source.DeleteOnDispose)
+            {
+                DeleteFileQuietly(source.Path);
+            }
+        }
+    }
+
+    private async Task<ResolvedRebalanceShard?> TryResolveVerifiedRebalanceSourceAsync(
+        XlShardManifest shard,
+        CancellationToken cancellationToken)
+    {
+        var resolved = await TryResolveReadableShardPathAsync(shard, cancellationToken);
+        if (resolved.Path is null || resolved.ChecksumMismatch)
+        {
+            if (resolved.DeleteOnDispose && resolved.Path is not null)
+            {
+                DeleteFileQuietly(resolved.Path);
+            }
+
+            return null;
+        }
+
+        var file = new FileInfo(resolved.Path);
+        if (file.Length != shard.Size
+            || !string.Equals(await ComputeFileSha256Async(resolved.Path, cancellationToken), shard.ChecksumSha256, StringComparison.OrdinalIgnoreCase))
+        {
+            if (resolved.DeleteOnDispose)
+            {
+                DeleteFileQuietly(resolved.Path);
+            }
+
+            return null;
+        }
+
+        return new ResolvedRebalanceShard(shard, resolved.Path, resolved.DeleteOnDispose);
+    }
+
+    private async Task CommitCopiedShardToTargetAsync(
+        string sourcePath,
+        XlShardManifest targetShard,
+        CancellationToken cancellationToken)
+    {
+        var sourceFile = new FileInfo(sourcePath);
+        if (sourceFile.Length != targetShard.Size
+            || !string.Equals(await ComputeFileSha256Async(sourcePath, cancellationToken), targetShard.ChecksumSha256, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new MeansException(MeansErrorCodes.InvalidRequest, "Rebalance source shard failed verification.", 503);
+        }
+
+        var disk = _disks.FirstOrDefault(item => item.DiskId == targetShard.DiskId);
+        if (disk is not null)
+        {
+            var targetPath = Path.Combine(disk.RootPath, targetShard.RelativePath);
+            if (string.Equals(NormalizeStoragePath(sourcePath), NormalizeStoragePath(targetPath), StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+            var tempPath = Path.Combine(
+                Path.GetDirectoryName(targetPath)!,
+                "." + Path.GetFileName(targetPath) + "." + Guid.NewGuid().ToString("N") + ".rebalance.tmp");
+            try
+            {
+                await using (var source = new FileStream(
+                    sourcePath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.Read,
+                    XlStreamBufferSize,
+                    FileOptions.Asynchronous | FileOptions.SequentialScan))
+                await using (var temp = new FileStream(
+                    tempPath,
+                    FileMode.CreateNew,
+                    FileAccess.Write,
+                    FileShare.None,
+                    XlStreamBufferSize,
+                    FileOptions.Asynchronous | FileOptions.SequentialScan))
+                {
+                    await source.CopyToAsync(temp, XlStreamBufferSize, cancellationToken);
+                }
+
+                var tempFile = new FileInfo(tempPath);
+                if (tempFile.Length != targetShard.Size
+                    || !string.Equals(await ComputeFileSha256Async(tempPath, cancellationToken), targetShard.ChecksumSha256, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new MeansException(MeansErrorCodes.InvalidRequest, "Rebalanced shard failed verification.", 503);
+                }
+
+                File.Move(tempPath, targetPath, overwrite: true);
+            }
+            finally
+            {
+                DeleteFileQuietly(tempPath);
+            }
+
+            return;
+        }
+
+        if (!_shardTransport.Enabled)
+        {
+            throw new MeansException(MeansErrorCodes.InvalidRequest, "Cluster shard transport is not configured for rebalance.", 503);
+        }
+
+        var node = await TryFindRemoteNodeForDiskAsync(targetShard.DiskId, cancellationToken)
+            ?? throw new MeansException(MeansErrorCodes.SlowDown, "Remote rebalance target is not online.", 503);
+        await using var content = new FileStream(
+            sourcePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            XlStreamBufferSize,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        await _shardTransport.WriteShardAsync(
+            node,
+            targetShard.DiskId,
+            targetShard.RelativePath,
+            content,
+            targetShard.Size,
+            targetShard.ChecksumSha256,
+            cancellationToken);
+    }
+
+    private async Task DeleteSupersededObjectFilesAsync(
+        XlObjectManifest oldManifest,
+        XlObjectManifest updatedManifest,
+        CancellationToken cancellationToken)
+    {
+        await DeleteSupersededManifestReplicasAsync(oldManifest, updatedManifest, cancellationToken);
+        var retainedShardLocations = updatedManifest.Parts
+            .SelectMany(part => part.Shards)
+            .Select(ShardLocationKey)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var shard in oldManifest.Parts.SelectMany(part => part.Shards))
+        {
+            if (retainedShardLocations.Contains(ShardLocationKey(shard)))
+            {
+                continue;
+            }
+
+            await DeleteShardLocationQuietlyAsync(shard, cancellationToken);
+        }
+    }
+
+    private async Task DeleteSupersededManifestReplicasAsync(
+        XlObjectManifest oldManifest,
+        XlObjectManifest updatedManifest,
+        CancellationToken cancellationToken)
+    {
+        var (bytes, checksum) = SerializeManifestCopy(updatedManifest);
+        var retainedDiskIds = SelectManifestReplicaTargets(updatedManifest, bytes.Length, checksum)
+            .Select(shard => shard.DiskId)
+            .ToHashSet(StringComparer.Ordinal);
+        var relativePath = ObjectManifestRelativePath(oldManifest.BucketName, oldManifest.ObjectId);
+        foreach (var disk in _disks)
+        {
+            if (!retainedDiskIds.Contains(disk.DiskId))
+            {
+                DeleteFileQuietly(Path.Combine(disk.RootPath, relativePath));
+            }
+        }
+
+        var oldRemoteDiskIds = oldManifest.Parts
+            .SelectMany(part => part.Shards)
+            .Select(shard => shard.DiskId)
+            .Where(diskId => _disks.All(disk => !string.Equals(disk.DiskId, diskId, StringComparison.Ordinal)))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        foreach (var diskId in oldRemoteDiskIds)
+        {
+            if (retainedDiskIds.Contains(diskId) || !_shardTransport.Enabled)
+            {
+                continue;
+            }
+
+            try
+            {
+                var node = await TryFindRemoteNodeForDiskAsync(diskId, cancellationToken);
+                if (node is not null)
+                {
+                    await _shardTransport.DeleteManifestAsync(node, diskId, relativePath, cancellationToken);
+                }
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    private async Task RollbackRebalanceAsync(
+        IReadOnlyList<XlShardManifest> stagedNewShards,
+        XlObjectManifest oldManifest,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await WriteManifestCopiesAsync(
+                oldManifest.BucketName,
+                oldManifest.ObjectId,
+                oldManifest,
+                oldManifest.Parts.SelectMany(part => part.Shards).ToArray(),
+                cancellationToken);
+        }
+        catch
+        {
+        }
+
+        foreach (var shard in stagedNewShards)
+        {
+            await DeleteShardLocationQuietlyAsync(shard, cancellationToken);
+        }
+    }
+
+    private async Task DeleteShardLocationQuietlyAsync(
+        XlShardManifest shard,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var disk = _disks.FirstOrDefault(item => item.DiskId == shard.DiskId);
+            if (disk is not null)
+            {
+                DeleteFileQuietly(Path.Combine(disk.RootPath, shard.RelativePath));
+                return;
+            }
+
+            if (!_shardTransport.Enabled)
+            {
+                return;
+            }
+
+            var node = await TryFindRemoteNodeForDiskAsync(shard.DiskId, cancellationToken);
+            if (node is not null)
+            {
+                await _shardTransport.DeleteShardAsync(node, shard.DiskId, shard.RelativePath, cancellationToken);
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private static bool ManifestShardLocationsEqual(
+        XlObjectManifest left,
+        XlObjectManifest right)
+    {
+        var leftLocations = left.Parts
+            .SelectMany(part => part.Shards)
+            .Select(ShardLocationKey)
+            .ToHashSet(StringComparer.Ordinal);
+        var rightLocations = right.Parts
+            .SelectMany(part => part.Shards)
+            .Select(ShardLocationKey)
+            .ToHashSet(StringComparer.Ordinal);
+        return leftLocations.SetEquals(rightLocations);
+    }
+
+    private static string ShardLocationKey(XlShardManifest shard)
+    {
+        return shard.DiskId
+            + "\0"
+            + shard.RelativePath
+                .Replace(Path.DirectorySeparatorChar, '/')
+                .Replace(Path.AltDirectorySeparatorChar, '/');
     }
 
     public async Task<ObjectScrubResult> ScrubObjectReplicasAsync(int maxItems, CancellationToken cancellationToken)
@@ -722,7 +1385,8 @@ public sealed partial class XlFsStore
             nodeStatus,
             now,
             now,
-            disks);
+            disks,
+            NormalizeFaultDomain("", "local"));
         var online = disks.Where(disk => disk.Status == StorageDiskStatuses.Online).ToArray();
         var pool = new StoragePoolInfo(
             _options.SetId,
@@ -734,6 +1398,13 @@ public sealed partial class XlFsStore
             online.Sum(disk => disk.TotalBytes),
             online.Sum(disk => disk.AvailableBytes));
         return new ClusterTopology(cluster, [node], [pool]);
+    }
+
+    private static string NormalizeFaultDomain(string? faultDomain, string nodeId)
+    {
+        return string.IsNullOrWhiteSpace(faultDomain)
+            ? nodeId.Trim()
+            : faultDomain.Trim();
     }
 
     private async Task<XlObjectManifest?> TryReadManifestAsync(
@@ -776,47 +1447,90 @@ public sealed partial class XlFsStore
             return await RepairReedSolomonObjectShardsAsync(record, manifest, cancellationToken);
         }
 
+        return await RepairFullCopyObjectShardsAsync(record, manifest, cancellationToken);
+    }
+
+    private async Task<bool> RepairFullCopyObjectShardsAsync(
+        XlObjectRecord record,
+        XlObjectManifest manifest,
+        CancellationToken cancellationToken)
+    {
         var changed = false;
         var updatedParts = new List<XlPartManifest>(manifest.Parts.Count);
         foreach (var part in manifest.Parts)
         {
-            string? sourcePath = null;
-            foreach (var shard in part.Shards)
-            {
-                var disk = _disks.FirstOrDefault(item => item.DiskId == shard.DiskId);
-                var path = disk is null ? null : Path.Combine(disk.RootPath, shard.RelativePath);
-                if (path is not null
-                    && File.Exists(path)
-                    && string.Equals(await ComputeFileSha256Async(path, cancellationToken), shard.ChecksumSha256, StringComparison.OrdinalIgnoreCase))
-                {
-                    sourcePath = path;
-                    break;
-                }
-            }
-
-            if (sourcePath is null)
+            var source = await TryResolveFullCopyRebalanceSourceAsync(part, cancellationToken);
+            if (source is null)
             {
                 return false;
             }
 
-            var shards = part.Shards.ToDictionary(shard => shard.DiskId, StringComparer.Ordinal);
-            foreach (var disk in _disks.Where(disk => disk.Online))
+            try
             {
-                if (shards.TryGetValue(disk.DiskId, out var existing)
-                    && File.Exists(Path.Combine(disk.RootPath, existing.RelativePath)))
+                var shards = part.Shards
+                    .GroupBy(shard => shard.DiskId, StringComparer.Ordinal)
+                    .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+                foreach (var shard in part.Shards)
                 {
-                    continue;
+                    var probe = await ProbeShardAsync(shard, verifyChecksum: true, cancellationToken);
+                    if (probe.Status == ShardProbeStatus.Available)
+                    {
+                        continue;
+                    }
+
+                    await CommitCopiedShardToTargetAsync(source.Path, shard, cancellationToken);
+                    changed = true;
                 }
 
-                var relative = RepairedPartRelativePath(record.BucketName, record.ObjectId, part.Name, disk.SetIndex);
-                var target = Path.Combine(disk.RootPath, relative);
-                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                File.Copy(sourcePath, target, overwrite: true);
-                shards[disk.DiskId] = new XlShardManifest(disk.DiskId, disk.SetIndex, relative, part.Size, part.ChecksumSha256);
-                changed = true;
-            }
+                var targets = await TryPlanFullCopyTargetsAsync(
+                        record.BucketName,
+                        record.Key,
+                        record.VersionId,
+                        part.Size,
+                        cancellationToken)
+                    ?? PlanLocalFullCopyTargets();
+                foreach (var target in targets)
+                {
+                    if (shards.ContainsKey(target.DiskId))
+                    {
+                        continue;
+                    }
 
-            updatedParts.Add(part with { Shards = shards.Values.OrderBy(shard => shard.SetIndex).ToArray() });
+                    var shard = new XlShardManifest(
+                        target.DiskId,
+                        target.SetIndex,
+                        RepairedPartRelativePath(record.BucketName, record.ObjectId, part.Name, target.SetIndex),
+                        part.Size,
+                        part.ChecksumSha256);
+                    await CommitCopiedShardToTargetAsync(source.Path, shard, cancellationToken);
+                    shards[target.DiskId] = shard;
+                    changed = true;
+                }
+
+                var available = 0;
+                foreach (var shard in shards.Values)
+                {
+                    var probe = await ProbeShardAsync(shard, verifyChecksum: true, cancellationToken);
+                    if (probe.Status == ShardProbeStatus.Available)
+                    {
+                        available++;
+                    }
+                }
+
+                if (available < WriteQuorum)
+                {
+                    return false;
+                }
+
+                updatedParts.Add(part with { Shards = shards.Values.OrderBy(shard => shard.SetIndex).ToArray() });
+            }
+            finally
+            {
+                if (source.DeleteOnDispose)
+                {
+                    DeleteFileQuietly(source.Path);
+                }
+            }
         }
 
         if (!changed)
@@ -1489,6 +2203,8 @@ public sealed partial class XlFsStore
         Missing,
         Corrupt
     }
+
+    private sealed record ResolvedRebalanceShard(XlShardManifest Shard, string Path, bool DeleteOnDispose);
 
     private sealed record ShardProbeResult(ShardProbeStatus Status);
 }

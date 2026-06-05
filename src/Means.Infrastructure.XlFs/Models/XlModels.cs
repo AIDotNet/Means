@@ -91,7 +91,9 @@ public sealed record XlMultipartPartRecord(
     DateTimeOffset LastModified,
     string ContentPath,
     string ChecksumSha256,
-    IReadOnlyList<XlShardManifest> Shards);
+    IReadOnlyList<XlShardManifest> Shards,
+    XlErasureInfo? Erasure,
+    int FailedShardCount);
 
 public sealed record XlHealRecord(
     string BucketName,

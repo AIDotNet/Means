@@ -11,12 +11,16 @@ public sealed class HttpClusterShardTransport : IClusterShardTransport
     private const string ShardLengthHeader = "x-means-shard-length";
     private const string ShardChecksumHeader = "x-means-shard-sha256";
 
-    private readonly HttpClient _client = new();
+    private readonly HttpClient _client;
     private readonly IOptions<ClusterOptions> _options;
 
     public HttpClusterShardTransport(IOptions<ClusterOptions> options)
     {
         _options = options;
+        _client = new HttpClient(CreateHandler(options.Value))
+        {
+            Timeout = TimeSpan.FromSeconds(NormalizeTimeoutSeconds(options.Value))
+        };
     }
 
     public bool Enabled => !string.IsNullOrWhiteSpace(_options.Value.InternalAuthToken);
@@ -37,7 +41,7 @@ public sealed class HttpClusterShardTransport : IClusterShardTransport
         request.Headers.TryAddWithoutValidation(ShardChecksumHeader, expectedChecksumSha256);
         request.Content = new StreamContent(content);
         request.Content.Headers.ContentLength = expectedLength;
-        using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        using var response = await SendAsync(request, node, cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
             throw await ToTransportExceptionAsync(response, node, cancellationToken);
@@ -55,7 +59,7 @@ public sealed class HttpClusterShardTransport : IClusterShardTransport
         EnsureEnabled();
         using var request = new HttpRequestMessage(HttpMethod.Get, ClusterFileUri(node, "shards", diskId, relativePath));
         request.Headers.TryAddWithoutValidation(ClusterTokenHeader, _options.Value.InternalAuthToken);
-        var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        var response = await SendAsync(request, node, cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
             using (response)
@@ -92,7 +96,7 @@ public sealed class HttpClusterShardTransport : IClusterShardTransport
         EnsureEnabled();
         using var request = new HttpRequestMessage(HttpMethod.Delete, ClusterFileUri(node, "shards", diskId, relativePath));
         request.Headers.TryAddWithoutValidation(ClusterTokenHeader, _options.Value.InternalAuthToken);
-        using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        using var response = await SendAsync(request, node, cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return false;
@@ -122,7 +126,7 @@ public sealed class HttpClusterShardTransport : IClusterShardTransport
         request.Headers.TryAddWithoutValidation(ShardChecksumHeader, expectedChecksumSha256);
         request.Content = new StreamContent(content);
         request.Content.Headers.ContentLength = expectedLength;
-        using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        using var response = await SendAsync(request, node, cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
             throw await ToTransportExceptionAsync(response, node, cancellationToken);
@@ -140,7 +144,7 @@ public sealed class HttpClusterShardTransport : IClusterShardTransport
         EnsureEnabled();
         using var request = new HttpRequestMessage(HttpMethod.Get, ClusterFileUri(node, "manifests", diskId, relativePath));
         request.Headers.TryAddWithoutValidation(ClusterTokenHeader, _options.Value.InternalAuthToken);
-        var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        var response = await SendAsync(request, node, cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
             using (response)
@@ -177,7 +181,7 @@ public sealed class HttpClusterShardTransport : IClusterShardTransport
         EnsureEnabled();
         using var request = new HttpRequestMessage(HttpMethod.Delete, ClusterFileUri(node, "manifests", diskId, relativePath));
         request.Headers.TryAddWithoutValidation(ClusterTokenHeader, _options.Value.InternalAuthToken);
-        using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        using var response = await SendAsync(request, node, cancellationToken);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return false;
@@ -201,7 +205,7 @@ public sealed class HttpClusterShardTransport : IClusterShardTransport
         EnsureEnabled();
         using var request = new HttpRequestMessage(HttpMethod.Head, ClusterFileUri(node, kind, diskId, relativePath));
         request.Headers.TryAddWithoutValidation(ClusterTokenHeader, _options.Value.InternalAuthToken);
-        using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        using var response = await SendAsync(request, node, cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
             throw await ToTransportExceptionAsync(response, node, cancellationToken);
@@ -226,6 +230,43 @@ public sealed class HttpClusterShardTransport : IClusterShardTransport
         {
             throw new MeansException(MeansErrorCodes.InvalidRequest, "Cluster shard transport is not configured.", 503);
         }
+    }
+
+    private async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        ClusterNodeInfo node,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new MeansException(
+                MeansErrorCodes.SlowDown,
+                $"Cluster shard transfer to {node.NodeId} timed out after {NormalizeTimeoutSeconds(_options.Value)} seconds.",
+                504);
+        }
+        catch (HttpRequestException ex)
+        {
+            throw new MeansException(
+                MeansErrorCodes.SlowDown,
+                $"Cluster shard transfer to {node.NodeId} failed: {ex.Message}",
+                503);
+        }
+    }
+
+    private static SocketsHttpHandler CreateHandler(ClusterOptions options)
+    {
+        return new SocketsHttpHandler
+        {
+            AutomaticDecompression = DecompressionMethods.None,
+            EnableMultipleHttp2Connections = true,
+            MaxConnectionsPerServer = NormalizeMaxConnectionsPerNode(options),
+            PooledConnectionLifetime = TimeSpan.FromSeconds(NormalizePooledConnectionLifetimeSeconds(options)),
+            PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2)
+        };
     }
 
     private static Uri ClusterFileUri(ClusterNodeInfo node, string kind, string diskId, string relativePath)
@@ -256,6 +297,21 @@ public sealed class HttpClusterShardTransport : IClusterShardTransport
             && long.TryParse(values.FirstOrDefault(), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var value)
             ? value
             : null;
+    }
+
+    private static int NormalizeMaxConnectionsPerNode(ClusterOptions options)
+    {
+        return Math.Clamp(options.ShardRpcMaxConnectionsPerNode, 1, 1024);
+    }
+
+    private static int NormalizeTimeoutSeconds(ClusterOptions options)
+    {
+        return Math.Clamp(options.ShardRpcRequestTimeoutSeconds, 5, 86_400);
+    }
+
+    private static int NormalizePooledConnectionLifetimeSeconds(ClusterOptions options)
+    {
+        return Math.Clamp(options.ShardRpcPooledConnectionLifetimeSeconds, 30, 86_400);
     }
 
     private static async Task<MeansException> ToTransportExceptionAsync(

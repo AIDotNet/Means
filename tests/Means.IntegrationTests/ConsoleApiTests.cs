@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using Means.Core;
+using Means.Infrastructure.XlFs;
 using Means.Protocol.S3;
 using Means.Services;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -98,6 +99,7 @@ public sealed class ConsoleApiTests
         Assert.DoesNotContain(topology.Nodes, node => node.NodeId == "other-node");
 
         var manual = Assert.Single(topology.Nodes, node => node.NodeId == "manual-node");
+        Assert.Equal("manual-node", manual.FaultDomain);
         Assert.Equal(StorageDiskStatuses.Online, Assert.Single(manual.Disks, disk => disk.DiskId == "manual-a").Status);
         Assert.Equal(StorageDiskStatuses.Offline, Assert.Single(manual.Disks, disk => disk.DiskId == "manual-b").Status);
 
@@ -587,6 +589,11 @@ public sealed class ConsoleApiTests
         Assert.Equal(0, replicaDiagnostics.GetProperty("missingReplicaFileCount").GetInt64());
         Assert.Equal(0, replicaDiagnostics.GetProperty("underReplicatedObjectCount").GetInt64());
         Assert.Equal(0, replicaDiagnostics.GetProperty("objectsWithoutReplicaManifestCount").GetInt64());
+        Assert.Equal(0, replicaDiagnostics.GetProperty("degradedObjectCount").GetInt64());
+        Assert.Equal(0, replicaDiagnostics.GetProperty("recoverableDegradedObjectCount").GetInt64());
+        Assert.Equal(0, replicaDiagnostics.GetProperty("unrecoverableObjectCount").GetInt64());
+        Assert.Equal(0, replicaDiagnostics.GetProperty("readQuorumLostObjectCount").GetInt64());
+        Assert.Equal(0, replicaDiagnostics.GetProperty("writeQuorumLostObjectCount").GetInt64());
         var repairQueue = diagnosticsRoot.GetProperty("repairQueue");
         Assert.Equal(0, repairQueue.GetProperty("pendingCount").GetInt64());
         Assert.Equal(0, repairQueue.GetProperty("failedCount").GetInt64());
@@ -594,12 +601,34 @@ public sealed class ConsoleApiTests
         var metadataDiagnostics = diagnosticsRoot.GetProperty("metadata");
         Assert.Equal(0, metadataDiagnostics.GetProperty("pendingCommitCount").GetInt64());
         Assert.Equal(0, metadataDiagnostics.GetProperty("orphanedReplicaRecordCount").GetInt64());
+        Assert.Equal(XlMetaSyncModes.Always, metadataDiagnostics.GetProperty("syncMode").GetString());
+        Assert.True(metadataDiagnostics.GetProperty("durableWriteSync").GetBoolean());
+        Assert.False(metadataDiagnostics.GetProperty("sharedNamespace").GetBoolean());
+        Assert.False(metadataDiagnostics.GetProperty("multiNodeWriteRisk").GetBoolean());
+        Assert.True(metadataDiagnostics.GetProperty("walBytes").GetInt64() > 0);
+        Assert.True(metadataDiagnostics.GetProperty("keyCount").GetInt64() > 0);
         var ecDiagnostics = diagnosticsRoot.GetProperty("erasureCoding");
         Assert.Equal(1, ecDiagnostics.GetProperty("profileCount").GetInt64());
         Assert.Equal(1, ecDiagnostics.GetProperty("enabledProfileCount").GetInt64());
         var internalTransport = diagnosticsRoot.GetProperty("internalTransport");
         Assert.True(internalTransport.GetProperty("shardRpcEnabled").GetBoolean());
         Assert.Equal(1024 * 1024, internalTransport.GetProperty("maxShardTransferBytes").GetInt64());
+        Assert.Equal(16, internalTransport.GetProperty("shardRpcMaxConnectionsPerNode").GetInt32());
+        Assert.Equal(120, internalTransport.GetProperty("shardRpcRequestTimeoutSeconds").GetInt32());
+        Assert.Equal(90, internalTransport.GetProperty("shardRpcPooledConnectionLifetimeSeconds").GetInt32());
+        var capacityAdmission = diagnosticsRoot.GetProperty("capacityAdmission");
+        Assert.True(capacityAdmission.GetProperty("enabled").GetBoolean());
+        Assert.Equal(4096, capacityAdmission.GetProperty("minimumDiskAvailableBytesAfterWrite").GetInt64());
+        Assert.Equal(0, capacityAdmission.GetProperty("minimumDiskAvailablePercentAfterWrite").GetDouble());
+        Assert.True(capacityAdmission.GetProperty("writableDiskCount").GetInt32() > 0);
+        Assert.Equal(0, capacityAdmission.GetProperty("lowWatermarkDiskCount").GetInt32());
+        Assert.True(capacityAdmission.GetProperty("largestWritableObjectBytes").GetInt64() > 0);
+        var placementPolicy = diagnosticsRoot.GetProperty("placementPolicy");
+        Assert.Equal(1, placementPolicy.GetProperty("minimumFaultDomains").GetInt32());
+        Assert.True(placementPolicy.GetProperty("onlineFaultDomainCount").GetInt32() >= 1);
+        Assert.True(placementPolicy.GetProperty("writableFaultDomainCount").GetInt32() >= 1);
+        Assert.True(placementPolicy.GetProperty("poolsMeetingFaultDomainPolicy").GetInt32() >= 1);
+        Assert.Equal(0, placementPolicy.GetProperty("poolsBelowFaultDomainPolicy").GetInt32());
         var backgroundTasks = diagnosticsRoot.GetProperty("backgroundTasks").EnumerateArray().ToArray();
         Assert.Contains(backgroundTasks, task => task.GetProperty("taskId").GetString() == "cluster-heartbeat");
         Assert.Contains(backgroundTasks, task => task.GetProperty("taskId").GetString() == "disk-health-isolation");
@@ -649,8 +678,30 @@ public sealed class ConsoleApiTests
         Assert.Contains("means_storage_buckets 1", metricsText);
         Assert.Contains("means_cluster_nodes{status=\"online\"} 1", metricsText);
         Assert.Contains("means_object_replica_files{state=\"missing\"} 0", metricsText);
+        Assert.Contains("means_object_replica_objects{state=\"degraded\"} 0", metricsText);
+        Assert.Contains("means_object_replica_objects{state=\"unrecoverable\"} 0", metricsText);
+        Assert.Contains("means_object_replica_objects{state=\"read_quorum_lost\"} 0", metricsText);
         Assert.Contains("# TYPE means_metadata_pending_commits gauge", metricsText);
+        Assert.Contains("means_metadata_sync_mode{mode=\"always\"} 1", metricsText);
+        Assert.Contains("means_metadata_durable_writes 1", metricsText);
+        Assert.Contains("means_metadata_shared_namespace 0", metricsText);
+        Assert.Contains("means_metadata_multi_node_write_risk 0", metricsText);
+        Assert.Contains("means_metadata_wal_bytes", metricsText);
+        Assert.Contains("means_metadata_key_count", metricsText);
         Assert.Contains("means_erasure_coding_profiles{state=\"enabled\"} 1", metricsText);
+        Assert.Contains("means_cluster_shard_rpc_enabled 1", metricsText);
+        Assert.Contains("means_cluster_shard_rpc_max_transfer_bytes 1048576", metricsText);
+        Assert.Contains("means_cluster_shard_rpc_max_connections_per_node 16", metricsText);
+        Assert.Contains("means_cluster_shard_rpc_request_timeout_seconds 120", metricsText);
+        Assert.Contains("means_cluster_shard_rpc_pooled_connection_lifetime_seconds 90", metricsText);
+        Assert.Contains("means_capacity_admission_enabled 1", metricsText);
+        Assert.Contains("means_capacity_admission_min_disk_available_bytes_after_write 4096", metricsText);
+        Assert.Contains("means_capacity_admission_min_disk_available_percent_after_write 0", metricsText);
+        Assert.Contains("means_capacity_admission_disks{state=\"writable\"}", metricsText);
+        Assert.Contains("means_capacity_admission_largest_writable_object_bytes", metricsText);
+        Assert.Contains("means_placement_min_fault_domains 1", metricsText);
+        Assert.Contains("means_placement_fault_domains{state=\"writable\"}", metricsText);
+        Assert.Contains("means_placement_pools{state=\"meeting_fault_domain_policy\"}", metricsText);
         Assert.Contains("means_background_task_interval_seconds{task=\"cluster-heartbeat\"} 5", metricsText);
         Assert.Contains("means_background_task_status{status=\"", metricsText);
 
@@ -788,6 +839,9 @@ public sealed class ConsoleApiTests
                     ["Means:Storage:SetId"] = "set-1",
                     ["Means:Storage:DefaultAccessKey"] = "meansadmin",
                     ["Means:Storage:DefaultSecretKey"] = "meansadminsecret",
+                    ["Means:Storage:DiskMinAvailableBytesAfterWrite"] = "4096",
+                    ["Means:Storage:DiskMinAvailablePercentAfterWrite"] = "0",
+                    ["Means:Storage:PlacementMinFaultDomains"] = "1",
                     ["Means:S3:ServiceHost"] = "api.means.local",
                     ["Means:S3:DomainSuffix"] = "means.local",
                     ["Means:S3:AliasPrefix"] = "/s3",
@@ -796,6 +850,7 @@ public sealed class ConsoleApiTests
                     ["Means:Cluster:ClusterName"] = "Test Cluster",
                     ["Means:Cluster:NodeId"] = "test-node",
                     ["Means:Cluster:NodeEndpoint"] = "https://api.means.local",
+                    ["Means:Cluster:FaultDomain"] = "rack-a",
                     ["Means:Cluster:PoolId"] = "test-pool",
                     ["Means:Cluster:PoolName"] = "Test Pool",
                     ["Means:Cluster:ObjectDiskId"] = "test-objects",
@@ -803,6 +858,9 @@ public sealed class ConsoleApiTests
                     ["Means:Cluster:OfflineAfterSeconds"] = "60",
                     ["Means:Cluster:InternalAuthToken"] = "cluster-secret",
                     ["Means:Cluster:MaxShardTransferBytes"] = (1024 * 1024).ToString(),
+                    ["Means:Cluster:ShardRpcMaxConnectionsPerNode"] = "16",
+                    ["Means:Cluster:ShardRpcRequestTimeoutSeconds"] = "120",
+                    ["Means:Cluster:ShardRpcPooledConnectionLifetimeSeconds"] = "90",
                     ["Means:RequestLimits:MaxConcurrentUploadRequests"] = "1"
                 };
                 foreach (var item in _overrides)

@@ -21,6 +21,7 @@ import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Progress } from "@/components/ui/progress"
 import { Separator } from "@/components/ui/separator"
 import {
   Table,
@@ -60,6 +61,11 @@ type ReadinessStage = {
   tone: ReadinessTone
   icon: ComponentType<{ className?: string }>
 }
+
+const EMPTY_TASK_GROUPS: BackgroundTaskManagement["groups"] = []
+const EMPTY_TASK_SNAPSHOTS: BackgroundTaskSnapshot[] = []
+const EMPTY_NODES: ClusterNodeInfo[] = []
+const EMPTY_POOLS: StoragePoolInfo[] = []
 
 export function ClusterPage() {
   const { t } = useTranslation()
@@ -126,14 +132,18 @@ export function ClusterPage() {
   const topology = state?.topology
   const diagnostics = state?.diagnostics
   const summary = diagnostics?.summary
-  const tasks = state?.tasks.groups ?? []
-  const taskSnapshots = state?.tasks.tasks ?? []
-  const nodes = topology?.nodes ?? []
-  const pools = topology?.pools ?? []
+  const taskGroups = state?.tasks.groups ?? EMPTY_TASK_GROUPS
+  const taskSnapshots = state?.tasks.tasks ?? EMPTY_TASK_SNAPSHOTS
+  const nodes = topology?.nodes ?? EMPTY_NODES
+  const pools = topology?.pools ?? EMPTY_POOLS
   const onlineNodes = summary?.onlineNodeCount ?? countByStatus(nodes, "Online")
   const offlineNodes = summary?.offlineNodeCount ?? Math.max(0, nodes.length - onlineNodes)
   const onlineDisks = summary?.onlineDiskCount ?? nodes.flatMap((node) => node.disks).filter((disk) => disk.status === "Online").length
   const offlineDisks = summary?.offlineDiskCount ?? Math.max(0, nodes.flatMap((node) => node.disks).length - onlineDisks)
+  const maintenanceTasks = useMemo(
+    () => taskSnapshots.filter((task) => isMaintenanceTask(task)),
+    [taskSnapshots]
+  )
 
   const taskCounts = useMemo(() => {
     return {
@@ -191,6 +201,14 @@ export function ClusterPage() {
 
       <DistributedReadiness diagnostics={diagnostics} tasks={taskSnapshots} loading={loading && !state} />
 
+      <MaintenanceOperations
+        diagnostics={diagnostics}
+        tasks={maintenanceTasks}
+        runningTaskId={runningTaskId}
+        onRun={runTask}
+        loading={loading && !state}
+      />
+
       <div className="grid gap-3 xl:grid-cols-[1.2fr_0.8fr]">
         <TopologyMap topology={topology} loading={loading && !state} />
         <TransportSummary diagnostics={diagnostics} tasks={taskSnapshots} loading={loading && !state} />
@@ -216,7 +234,7 @@ export function ClusterPage() {
       </div>
 
       <div className="grid gap-3 xl:grid-cols-2">
-        {tasks.map((group) => (
+        {taskGroups.map((group) => (
           <Surface key={group.category}>
             <PanelTitle icon={ActivityIcon} title={group.name} value={t("cluster.tasks.count", { count: group.tasks.length })} />
             <div className="mt-4">
@@ -260,12 +278,205 @@ function DistributedReadiness({
         title={t("cluster.readiness.title")}
         value={t("cluster.readiness.generated", { value: formatDateTime(diagnostics.generatedAt) })}
       />
-      <div className="mt-4 grid gap-2 md:grid-cols-5">
+      <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
         {stages.map((stage) => (
           <ReadinessStageCell key={stage.id} stage={stage} />
         ))}
       </div>
     </Surface>
+  )
+}
+
+function MaintenanceOperations({
+  diagnostics,
+  tasks,
+  runningTaskId,
+  onRun,
+  loading,
+}: {
+  diagnostics: ClusterDiagnostics | undefined
+  tasks: BackgroundTaskSnapshot[]
+  runningTaskId: string | null
+  onRun: (taskId: string) => void
+  loading: boolean
+}) {
+  const { t } = useTranslation()
+
+  if (loading || !diagnostics) {
+    return (
+      <Surface>
+        <PanelTitle icon={WrenchIcon} title={t("cluster.maintenance.title")} />
+        <div className="mt-4">
+          <EmptyState>{t("cluster.maintenance.loading")}</EmptyState>
+        </div>
+      </Surface>
+    )
+  }
+
+  const repairQueue = diagnostics.repairQueue
+  const rebalanceTask = tasks.find((task) => isRebalanceTask(task))
+  const repairTaskCount = tasks.filter((task) => task.category.toLowerCase() === "repair").length
+  const pendingPercent = repairQueue.totalCount > 0
+    ? (repairQueue.pendingCount / repairQueue.totalCount) * 100
+    : 0
+  const failedPercent = repairQueue.totalCount > 0
+    ? (repairQueue.failedCount / repairQueue.totalCount) * 100
+    : 0
+  const runningCount = tasks.filter((task) => task.status === "Running").length
+  const failedTaskCount = tasks.filter((task) => task.status === "Failed").length
+
+  return (
+    <Surface>
+      <PanelTitle
+        icon={WrenchIcon}
+        title={t("cluster.maintenance.title")}
+        value={t("cluster.maintenance.value", { running: runningCount, failed: failedTaskCount })}
+      />
+      <div className="mt-4 grid gap-5 xl:grid-cols-[0.82fr_1.18fr]">
+        <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-1">
+          <MaintenanceSignal
+            label={t("cluster.maintenance.signals.repairQueue")}
+            value={t("cluster.maintenance.signals.pendingFailed", {
+              pending: repairQueue.pendingCount,
+              failed: repairQueue.failedCount,
+            })}
+            detail={t("cluster.maintenance.signals.repairQueueDetail", {
+              total: repairQueue.totalCount,
+              retryable: repairQueue.retryableFailedCount,
+            })}
+            progress={pendingPercent}
+            tone={repairQueue.failedCount > 0 ? "warn" : repairQueue.pendingCount > 0 ? "neutral" : "ok"}
+          />
+          <MaintenanceSignal
+            label={t("cluster.maintenance.signals.rebalance")}
+            value={rebalanceTask?.lastResult ?? t("cluster.maintenance.signals.noRun")}
+            detail={rebalanceTask?.lastCompletedAt
+              ? t("cluster.maintenance.signals.lastCompleted", { value: formatDateTime(rebalanceTask.lastCompletedAt) })
+              : t("cluster.maintenance.signals.rebalanceDetail")}
+            progress={taskHealthPercent(rebalanceTask)}
+            tone={rebalanceTask?.status === "Failed" ? "warn" : rebalanceTask?.status === "Running" ? "neutral" : "ok"}
+          />
+          <MaintenanceSignal
+            label={t("cluster.maintenance.signals.background")}
+            value={t("cluster.maintenance.signals.taskMix", {
+              repair: repairTaskCount,
+              total: tasks.length,
+            })}
+            detail={t("cluster.maintenance.signals.taskDetail", {
+              success: sum(tasks, (task) => task.successCount),
+              failure: sum(tasks, (task) => task.failureCount),
+            })}
+            progress={failedPercent}
+            tone={failedTaskCount > 0 ? "warn" : "neutral"}
+          />
+        </div>
+        <MaintenanceTaskTable tasks={tasks} runningTaskId={runningTaskId} onRun={onRun} />
+      </div>
+    </Surface>
+  )
+}
+
+function MaintenanceSignal({
+  label,
+  value,
+  detail,
+  progress,
+  tone,
+}: {
+  label: string
+  value: string
+  detail: string
+  progress: number
+  tone: "ok" | "neutral" | "warn"
+}) {
+  return (
+    <div className="min-w-0 border-l border-border pl-3">
+      <div className="text-[11px] font-semibold uppercase tracking-normal text-muted-foreground">{label}</div>
+      <div className="mt-1 truncate text-sm font-bold">{value}</div>
+      <Progress
+        value={clampPercent(progress)}
+        className={cn(
+          "mt-3",
+          tone === "ok" && "[&_[data-slot=progress-indicator]]:bg-emerald-600",
+          tone === "neutral" && "[&_[data-slot=progress-indicator]]:bg-sky-600",
+          tone === "warn" && "[&_[data-slot=progress-indicator]]:bg-amber-600"
+        )}
+      />
+      <div className="mt-2 text-xs leading-5 text-muted-foreground">{detail}</div>
+    </div>
+  )
+}
+
+function MaintenanceTaskTable({
+  tasks,
+  runningTaskId,
+  onRun,
+}: {
+  tasks: BackgroundTaskSnapshot[]
+  runningTaskId: string | null
+  onRun: (taskId: string) => void
+}) {
+  const { t } = useTranslation()
+
+  if (tasks.length === 0) {
+    return <EmptyState>{t("cluster.maintenance.empty")}</EmptyState>
+  }
+
+  return (
+    <div className="overflow-hidden rounded-lg border">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>{t("cluster.maintenance.columns.task")}</TableHead>
+            <TableHead>{t("cluster.maintenance.columns.status")}</TableHead>
+            <TableHead>{t("cluster.maintenance.columns.result")}</TableHead>
+            <TableHead>{t("cluster.maintenance.columns.lastRun")}</TableHead>
+            <TableHead className="text-right">{t("cluster.maintenance.columns.action")}</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {tasks.map((task) => {
+            const running = runningTaskId === task.taskId || task.status === "Running"
+            return (
+              <TableRow key={task.taskId}>
+                <TableCell>
+                  <div className="font-semibold">{task.name}</div>
+                  <div className="mt-1 font-mono text-[11px] text-muted-foreground">{task.taskId}</div>
+                </TableCell>
+                <TableCell><StatusBadge status={task.status} /></TableCell>
+                <TableCell>
+                  <div className={cn(
+                    "max-w-64 truncate font-mono text-xs",
+                    task.lastError ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground"
+                  )}>
+                    {task.lastError ?? task.lastResult ?? t("cluster.maintenance.none")}
+                  </div>
+                </TableCell>
+                <TableCell>
+                  <div className="text-xs">
+                    {task.lastCompletedAt ? formatDateTime(task.lastCompletedAt) : t("cluster.maintenance.none")}
+                  </div>
+                  <div className="mt-1 text-[11px] text-muted-foreground">
+                    {task.lastDurationMilliseconds === null ? t("cluster.maintenance.none") : formatDurationMilliseconds(task.lastDurationMilliseconds)}
+                  </div>
+                </TableCell>
+                <TableCell className="text-right">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={!task.manualRunSupported || running}
+                    onClick={() => onRun(task.taskId)}
+                  >
+                    <RotateCwIcon className={running ? "animate-spin" : ""} />
+                    {t("cluster.tasks.runNow")}
+                  </Button>
+                </TableCell>
+              </TableRow>
+            )
+          })}
+        </TableBody>
+      </Table>
+    </div>
   )
 }
 
@@ -304,8 +515,11 @@ function TransportSummary({
           icon={CableIcon}
           label={t("cluster.transport.shardRpc")}
           value={diagnostics.internalTransport.shardRpcEnabled ? t("cluster.transport.enabled") : t("cluster.transport.disabled")}
-          detail={t("cluster.transport.maxTransfer", {
-            value: formatBytes(diagnostics.internalTransport.maxShardTransferBytes),
+          detail={t("cluster.transport.rpcPolicy", {
+            transfer: formatBytes(diagnostics.internalTransport.maxShardTransferBytes),
+            connections: formatNumber(diagnostics.internalTransport.shardRpcMaxConnectionsPerNode),
+            timeout: diagnostics.internalTransport.shardRpcRequestTimeoutSeconds,
+            lifetime: diagnostics.internalTransport.shardRpcPooledConnectionLifetimeSeconds,
           })}
           tone={diagnostics.internalTransport.shardRpcEnabled ? "partial" : "pending"}
         />
@@ -408,9 +622,7 @@ function PoolTopology({ pool, nodes }: { pool: StoragePoolInfo; nodes: ClusterNo
             <span>{formatBytes(usedBytes)}</span>
             <span>{formatBytes(pool.totalBytes)}</span>
           </div>
-          <div className="mt-1 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
-            <div className="h-full bg-sky-600" style={{ width: `${clampPercent(usedPercent)}%` }} />
-          </div>
+          <Progress value={clampPercent(usedPercent)} className="mt-1 h-2 [&_[data-slot=progress-indicator]]:bg-sky-600" />
         </div>
       </div>
       <div className="mt-3 grid gap-2 lg:grid-cols-2">
@@ -461,9 +673,7 @@ function DiskPill({ disk }: { disk: StorageDiskInfo }) {
         <span className="truncate font-semibold">{disk.diskId}</span>
         <StatusDot status={disk.status} />
       </div>
-      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
-        <div className="h-full bg-emerald-600" style={{ width: `${clampPercent(usedPercent)}%` }} />
-      </div>
+      <Progress value={clampPercent(usedPercent)} className="mt-2 [&_[data-slot=progress-indicator]]:bg-emerald-600" />
       <div className="mt-1 truncate text-[11px] text-muted-foreground">
         {t("cluster.topologyMap.diskFree", { value: formatBytes(disk.availableBytes) })}
       </div>
@@ -485,11 +695,12 @@ function NodeTable({ nodes, loading }: { nodes: ClusterNodeInfo[]; loading: bool
   return (
     <Table>
       <TableHeader>
-        <TableRow>
-          <TableHead>{t("cluster.nodes.columns.node")}</TableHead>
-          <TableHead>{t("cluster.nodes.columns.endpoint")}</TableHead>
-          <TableHead>{t("cluster.nodes.columns.disks")}</TableHead>
-          <TableHead>{t("cluster.nodes.columns.lastHeartbeat")}</TableHead>
+          <TableRow>
+            <TableHead>{t("cluster.nodes.columns.node")}</TableHead>
+            <TableHead>{t("cluster.nodes.columns.faultDomain")}</TableHead>
+            <TableHead>{t("cluster.nodes.columns.endpoint")}</TableHead>
+            <TableHead>{t("cluster.nodes.columns.disks")}</TableHead>
+            <TableHead>{t("cluster.nodes.columns.lastHeartbeat")}</TableHead>
           <TableHead>{t("cluster.nodes.columns.status")}</TableHead>
         </TableRow>
       </TableHeader>
@@ -500,6 +711,7 @@ function NodeTable({ nodes, loading }: { nodes: ClusterNodeInfo[]; loading: bool
               <div className="font-semibold">{node.nodeId}</div>
               <div className="text-xs text-muted-foreground">{node.hostName}</div>
             </TableCell>
+            <TableCell className="max-w-48 truncate font-mono text-xs">{node.faultDomain || node.nodeId}</TableCell>
             <TableCell className="max-w-72 truncate font-mono text-xs">{node.endpoint}</TableCell>
             <TableCell>{formatNumber(node.disks.length)}</TableCell>
             <TableCell>{formatDateTime(node.lastHeartbeatAt)}</TableCell>
@@ -517,7 +729,7 @@ function PoolCard({ pool }: { pool: StoragePoolInfo }) {
   const usedPercent = pool.totalBytes > 0 ? (usedBytes / pool.totalBytes) * 100 : 0
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3 dark:border-border dark:bg-muted/30">
+    <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-3 dark:border-border dark:bg-muted/30">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="truncate text-sm font-bold">{pool.name}</div>
@@ -527,9 +739,7 @@ function PoolCard({ pool }: { pool: StoragePoolInfo }) {
         </div>
         <Badge variant="outline">{formatBytes(pool.totalBytes)}</Badge>
       </div>
-      <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
-        <div className="h-full bg-blue-600" style={{ width: `${clampPercent(usedPercent)}%` }} />
-      </div>
+      <Progress value={clampPercent(usedPercent)} className="mt-3 h-2 [&_[data-slot=progress-indicator]]:bg-blue-600" />
       <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
         <span>{t("cluster.pools.used", { value: formatBytes(usedBytes) })}</span>
         <span>{t("cluster.pools.available", { value: formatBytes(pool.availableBytes) })}</span>
@@ -554,7 +764,7 @@ function TaskTable({
       {tasks.map((task) => {
         const running = runningTaskId === task.taskId || task.status === "Running"
         return (
-          <div key={task.taskId} className="rounded-xl border border-slate-200 bg-white p-3 dark:border-border dark:bg-card">
+          <div key={task.taskId} className="rounded-lg border border-slate-200 bg-white p-3 dark:border-border dark:bg-card">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
@@ -679,7 +889,7 @@ function MetricTile({
     <Surface className="min-h-32">
       <div className="flex items-center justify-between gap-3">
         <div className={cn(
-          "grid size-9 place-items-center rounded-lg",
+          "grid size-9 place-items-center rounded-md",
           tone === "ok" && "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30",
           tone === "warn" && "bg-amber-50 text-amber-700 dark:bg-amber-950/30",
           tone === "neutral" && "bg-blue-50 text-blue-700 dark:bg-blue-950/30"
@@ -721,7 +931,7 @@ function Surface({ children, className }: { children: ReactNode; className?: str
   return (
     <section
       className={cn(
-        "min-w-0 rounded-[1.15rem] border border-slate-200/80 bg-white p-4 text-slate-950 shadow-[0_18px_45px_rgba(15,23,42,0.06)] dark:border-border dark:bg-card dark:text-card-foreground",
+        "min-w-0 rounded-lg border border-border/80 bg-background p-4 text-foreground shadow-xs",
         className
       )}
     >
@@ -809,6 +1019,18 @@ function buildReadinessStages(
   const repairTaskCount = tasks.filter((task) => isMaintenanceTask(task)).length
   const failedTaskCount = tasks.filter((task) => task.status === "Failed").length
   const ecEnabled = diagnostics.erasureCoding.enabledProfileCount > 0
+  const capacityAdmission = diagnostics.capacityAdmission
+  const capacityConstrained = capacityAdmission.lowWatermarkDiskCount > 0 || capacityAdmission.lowWatermarkPoolCount > 0
+  const capacityReady = capacityAdmission.writableDiskCount > 0
+  const placementPolicy = diagnostics.placementPolicy
+  const placementConstrained = placementPolicy.poolsBelowFaultDomainPolicy > 0
+    || (placementPolicy.minimumFaultDomains > 0 && placementPolicy.writableFaultDomainCount < placementPolicy.minimumFaultDomains)
+  const placementReady = placementPolicy.minimumFaultDomains === 0
+    ? placementPolicy.writableFaultDomainCount > 0
+    : placementPolicy.writableFaultDomainCount >= placementPolicy.minimumFaultDomains
+  const metadata = diagnostics.metadata
+  const metadataConstrained = metadata.multiNodeWriteRisk || !metadata.durableWriteSync
+  const metadataReady = metadata.durableWriteSync && !metadata.multiNodeWriteRisk
 
   return [
     {
@@ -828,8 +1050,67 @@ function buildReadinessStages(
         : t("cluster.readiness.topology.detail", {
           nodes: summary.onlineNodeCount,
           disks: summary.onlineDiskCount,
-        }),
+      }),
       tone: topologyDegraded ? "attention" : topologyHealthy ? "ready" : "pending",
+    },
+    {
+      id: "metadata",
+      icon: DatabaseIcon,
+      title: t("cluster.readiness.metadata.title"),
+      stateLabel: metadataConstrained
+        ? t("cluster.readiness.states.attention")
+        : metadataReady
+          ? t("cluster.readiness.states.ready")
+          : t("cluster.readiness.states.pending"),
+      detail: metadata.multiNodeWriteRisk
+        ? t("cluster.readiness.metadata.risk", {
+          mode: metadata.syncMode,
+        })
+        : t("cluster.readiness.metadata.detail", {
+          mode: metadata.syncMode,
+          keys: formatNumber(metadata.keyCount),
+          wal: formatBytes(metadata.walBytes),
+        }),
+      tone: metadataConstrained ? "attention" : metadataReady ? "ready" : "pending",
+    },
+    {
+      id: "capacity",
+      icon: GaugeIcon,
+      title: t("cluster.readiness.capacity.title"),
+      stateLabel: capacityConstrained
+        ? t("cluster.readiness.states.attention")
+        : capacityReady
+          ? t("cluster.readiness.states.ready")
+          : t("cluster.readiness.states.pending"),
+      detail: capacityAdmission.enabled
+        ? t("cluster.readiness.capacity.enabled", {
+          writable: formatNumber(capacityAdmission.writableDiskCount),
+          low: formatNumber(capacityAdmission.lowWatermarkDiskCount),
+          largest: formatBytes(capacityAdmission.largestWritableObjectBytes),
+        })
+        : t("cluster.readiness.capacity.disabled"),
+      tone: capacityConstrained ? "attention" : capacityReady ? "ready" : "pending",
+    },
+    {
+      id: "placement",
+      icon: RouteIcon,
+      title: t("cluster.readiness.placement.title"),
+      stateLabel: placementConstrained
+        ? t("cluster.readiness.states.attention")
+        : placementReady
+          ? t("cluster.readiness.states.ready")
+          : t("cluster.readiness.states.pending"),
+      detail: placementPolicy.minimumFaultDomains > 0
+        ? t("cluster.readiness.placement.strict", {
+          required: formatNumber(placementPolicy.minimumFaultDomains),
+          writable: formatNumber(placementPolicy.writableFaultDomainCount),
+          pools: formatNumber(placementPolicy.poolsMeetingFaultDomainPolicy),
+        })
+        : t("cluster.readiness.placement.preferred", {
+          writable: formatNumber(placementPolicy.writableFaultDomainCount),
+          pools: formatNumber(placementPolicy.poolsMeetingFaultDomainPolicy),
+        }),
+      tone: placementConstrained ? "attention" : placementReady ? "ready" : "pending",
     },
     {
       id: "transport",
@@ -841,6 +1122,9 @@ function buildReadinessStages(
       detail: diagnostics.internalTransport.shardRpcEnabled
         ? t("cluster.readiness.transport.enabled", {
           limit: formatBytes(diagnostics.internalTransport.maxShardTransferBytes),
+          connections: formatNumber(diagnostics.internalTransport.shardRpcMaxConnectionsPerNode),
+          timeout: diagnostics.internalTransport.shardRpcRequestTimeoutSeconds,
+          lifetime: diagnostics.internalTransport.shardRpcPooledConnectionLifetimeSeconds,
         })
         : t("cluster.readiness.transport.disabled"),
       tone: diagnostics.internalTransport.shardRpcEnabled ? "partial" : "pending",
@@ -888,6 +1172,42 @@ function buildReadinessStages(
 function isMaintenanceTask(task: BackgroundTaskSnapshot) {
   const category = task.category.toLowerCase()
   return category === "repair" || category === "rebalance" || category === "replication"
+}
+
+function isRebalanceTask(task: BackgroundTaskSnapshot) {
+  return task.taskId === "replica-rebalance" || task.category.toLowerCase() === "rebalance"
+}
+
+function taskHealthPercent(task: BackgroundTaskSnapshot | undefined) {
+  if (!task) {
+    return 0
+  }
+
+  if (task.status === "Running") {
+    return 65
+  }
+
+  if (task.status === "Failed") {
+    return 100
+  }
+
+  if (task.successCount + task.failureCount === 0) {
+    return 0
+  }
+
+  return (task.successCount / (task.successCount + task.failureCount)) * 100
+}
+
+function formatDurationMilliseconds(value: number) {
+  if (value < 1000) {
+    return `${Math.max(0, Math.round(value))} ms`
+  }
+
+  if (value < 60_000) {
+    return `${(value / 1000).toFixed(1)} s`
+  }
+
+  return `${(value / 60_000).toFixed(1)} min`
 }
 
 function toneSurfaceClass(tone: ReadinessTone) {

@@ -262,7 +262,7 @@ function VersionBrowser({ bucketName }: { bucketName: string }) {
     setKeyMarker(null)
     setVersionIdMarker(null)
     void load(null, null)
-  }, [bucketName, prefix])
+  }, [load])
 
   const downloadVersion = async (version: ObjectVersion) => {
     try {

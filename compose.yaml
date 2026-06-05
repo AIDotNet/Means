@@ -2,7 +2,7 @@ name: means-single
 
 services:
   means:
-    image: means:aot-scratch
+    image: hejiale010426/means
     build:
       context: .
       dockerfile: src/Means/Dockerfile

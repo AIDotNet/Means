@@ -40,13 +40,24 @@ public sealed partial class XlFsStore
         try
         {
             var hash = await WriteTempObjectAsync(request.Content, tempPath, cancellationToken);
-            var shards = await WriteFullCopyShardsAsync(
+            var erasureWrite = await TryWriteErasureCodedShardsAsync(
+                upload.BucketName,
+                partId,
                 tempPath,
-                disk => MultipartPartRelativePath(upload.BucketName, upload.UploadId, partId, disk.SetIndex),
                 hash.Length,
-                hash.ChecksumSha256,
-                "Insufficient online disks for multipart part write quorum.",
                 cancellationToken);
+            var erasure = erasureWrite?.Erasure ?? FullCopyErasureInfo();
+            var shards = erasureWrite?.Shards
+                ?? await WriteFullCopyShardsAsync(
+                    upload.BucketName,
+                    MultipartPlacementKey(upload.Key, upload.UploadId, request.PartNumber),
+                    partId,
+                    tempPath,
+                    setIndex => MultipartPartRelativePath(upload.BucketName, upload.UploadId, partId, setIndex),
+                    hash.Length,
+                    hash.ChecksumSha256,
+                    "Insufficient online disks for multipart part write quorum.",
+                    cancellationToken);
 
             var existing = await Db.GetJsonAsync<XlMultipartPartRecord>(
                 Keys.MultipartPart(upload.BucketName, upload.Key, upload.UploadId, request.PartNumber),
@@ -63,7 +74,9 @@ public sealed partial class XlFsStore
                 DateTimeOffset.UtcNow,
                 shards[0].RelativePath,
                 hash.ChecksumSha256,
-                shards);
+                shards,
+                erasure,
+                erasureWrite?.FailedShardCount ?? 0);
 
             await Db.PutJsonAsync(
                 Keys.MultipartPart(upload.BucketName, upload.Key, upload.UploadId, request.PartNumber),
@@ -72,7 +85,7 @@ public sealed partial class XlFsStore
 
             if (existing is not null)
             {
-                DeleteMultipartPartFilesQuietly(existing);
+                await DeleteMultipartPartFilesQuietlyAsync(existing, CancellationToken.None);
             }
 
             return ToMultipartPartInfo(record);
@@ -132,6 +145,7 @@ public sealed partial class XlFsStore
 
         var etag = Convert.ToHexString(multipartMd5.GetHashAndReset()).ToLowerInvariant() + "-" + ordered.Count;
         var now = DateTimeOffset.UtcNow;
+        var erasure = ResolveMultipartErasureInfo(ordered);
         var record = new XlObjectRecord(
             upload.BucketName,
             upload.Key,
@@ -157,7 +171,7 @@ public sealed partial class XlFsStore
             upload.ContentType,
             now,
             false,
-            new XlErasureInfo("full-copy-v1", Math.Max(1, _options.ErasureDataShards), Math.Max(0, _options.ErasureParityShards), 128 * 1024, WriteQuorum, ReadQuorum),
+            erasure,
             manifestParts,
             upload.Metadata,
             new Dictionary<string, string>(),
@@ -187,12 +201,17 @@ public sealed partial class XlFsStore
             await DeleteObjectFilesQuietlyAsync(existing, CancellationToken.None);
         }
 
+        if (ordered.Any(part => part.FailedShardCount > 0))
+        {
+            await TryQueueHealAsync(ToObjectInfo(record), "ErasureWriteDegraded", cancellationToken);
+        }
+
         var completedPartNumbers = ordered.Select(part => part.PartNumber).ToHashSet();
         foreach (var part in storedParts.Values)
         {
             if (!completedPartNumbers.Contains(part.PartNumber))
             {
-                DeleteMultipartPartFilesQuietly(part);
+                await DeleteMultipartPartFilesQuietlyAsync(part, CancellationToken.None);
             }
         }
 
@@ -219,7 +238,7 @@ public sealed partial class XlFsStore
 
         foreach (var part in parts)
         {
-            DeleteMultipartPartFilesQuietly(part);
+            await DeleteMultipartPartFilesQuietlyAsync(part, CancellationToken.None);
         }
     }
 
@@ -364,7 +383,7 @@ public sealed partial class XlFsStore
                 await Db.PutBatchAsync(mutations, cancellationToken);
                 foreach (var part in parts)
                 {
-                    DeleteMultipartPartFilesQuietly(part);
+                    await DeleteMultipartPartFilesQuietlyAsync(part, CancellationToken.None);
                 }
 
                 deleted++;
@@ -426,7 +445,9 @@ public sealed partial class XlFsStore
         throw new MeansException(MeansErrorCodes.InvalidPart, "One or more uploaded part files are missing.", 400);
     }
 
-    private void DeleteMultipartPartFilesQuietly(XlMultipartPartRecord part)
+    private async Task DeleteMultipartPartFilesQuietlyAsync(
+        XlMultipartPartRecord part,
+        CancellationToken cancellationToken)
     {
         foreach (var shard in part.Shards)
         {
@@ -434,6 +455,26 @@ public sealed partial class XlFsStore
             if (disk is not null)
             {
                 DeleteFileQuietly(Path.Combine(disk.RootPath, shard.RelativePath));
+                continue;
+            }
+
+            if (!_shardTransport.Enabled)
+            {
+                continue;
+            }
+
+            var node = await TryFindRemoteNodeForDiskAsync(shard.DiskId, cancellationToken);
+            if (node is null)
+            {
+                continue;
+            }
+
+            try
+            {
+                await _shardTransport.DeleteShardAsync(node, shard.DiskId, shard.RelativePath, cancellationToken);
+            }
+            catch
+            {
             }
         }
     }
@@ -464,9 +505,59 @@ public sealed partial class XlFsStore
             record.LastModified);
     }
 
+    private XlErasureInfo ResolveMultipartErasureInfo(IReadOnlyList<XlMultipartPartRecord> parts)
+    {
+        var erasure = parts[0].Erasure ?? FullCopyErasureInfo();
+        foreach (var part in parts.Skip(1))
+        {
+            var partErasure = part.Erasure ?? FullCopyErasureInfo();
+            if (!SameErasureProfile(erasure, partErasure))
+            {
+                throw new MeansException(
+                    MeansErrorCodes.InvalidPart,
+                    "Multipart parts were uploaded with mixed storage layouts and cannot be completed together.",
+                    400);
+            }
+        }
+
+        return erasure;
+    }
+
+    private XlErasureInfo FullCopyErasureInfo()
+    {
+        return new XlErasureInfo(
+            FullCopyAlgorithm,
+            Math.Max(1, _options.ErasureDataShards),
+            Math.Max(0, _options.ErasureParityShards),
+            128 * 1024,
+            WriteQuorum,
+            ReadQuorum);
+    }
+
+    private static bool SameErasureProfile(XlErasureInfo left, XlErasureInfo right)
+    {
+        if (string.Equals(left.Algorithm, FullCopyAlgorithm, StringComparison.Ordinal)
+            || string.Equals(right.Algorithm, FullCopyAlgorithm, StringComparison.Ordinal))
+        {
+            return string.Equals(left.Algorithm, right.Algorithm, StringComparison.Ordinal);
+        }
+
+        return string.Equals(left.Algorithm, right.Algorithm, StringComparison.Ordinal)
+            && left.DataShards == right.DataShards
+            && left.ParityShards == right.ParityShards
+            && left.BlockSizeBytes == right.BlockSizeBytes
+            && left.WriteQuorum == right.WriteQuorum
+            && left.ReadQuorum == right.ReadQuorum;
+    }
+
     private static string MultipartPartRelativePath(string bucketName, string uploadId, string partId, int setIndex)
     {
         return Path.Combine("objects", BucketHash(bucketName), "multipart-" + uploadId, partId, "part." + setIndex.ToString("D2"));
+    }
+
+    private static string MultipartPlacementKey(string key, string uploadId, int partNumber)
+    {
+        return key + "#multipart/" + uploadId + "/" + partNumber.ToString("D5");
     }
 
     private static void ValidatePartNumber(int partNumber)

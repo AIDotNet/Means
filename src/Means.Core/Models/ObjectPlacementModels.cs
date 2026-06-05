@@ -6,7 +6,10 @@ public sealed record ObjectPlacementRequest(
     string? VersionId,
     int ReplicaCount,
     long ContentLength = 0,
-    string? PoolId = null);
+    string? PoolId = null,
+    long MinimumAvailableBytesAfterWrite = 0,
+    double MinimumAvailableRatioAfterWrite = 0,
+    int MinimumDistinctFaultDomains = 0);
 
 public sealed record ObjectPlacementPlan(
     string BucketName,

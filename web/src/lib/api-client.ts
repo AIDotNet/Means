@@ -172,6 +172,7 @@ export type ClusterNodeInfo = {
   registeredAt: string
   lastHeartbeatAt: string
   disks: StorageDiskInfo[]
+  faultDomain: string
 }
 
 export type ClusterTopology = {
@@ -190,6 +191,11 @@ export type ObjectReplicaDiagnostics = {
   missingReplicaObjectCount: number
   underReplicatedObjectCount: number
   objectsWithoutReplicaManifestCount: number
+  degradedObjectCount: number
+  recoverableDegradedObjectCount: number
+  unrecoverableObjectCount: number
+  readQuorumLostObjectCount: number
+  writeQuorumLostObjectCount: number
 }
 
 export type ReplicaRepairQueueStatusDiagnostics = {
@@ -233,11 +239,39 @@ export type ErasureCodingDiagnostics = {
 export type MetadataDiagnostics = {
   pendingCommitCount: number
   orphanedReplicaRecordCount: number
+  syncMode: string
+  durableWriteSync: boolean
+  sharedNamespace: boolean
+  multiNodeWriteRisk: boolean
+  walBytes: number
+  keyCount: number
 }
 
 export type ClusterInternalTransportDiagnostics = {
   shardRpcEnabled: boolean
   maxShardTransferBytes: number
+  shardRpcMaxConnectionsPerNode: number
+  shardRpcRequestTimeoutSeconds: number
+  shardRpcPooledConnectionLifetimeSeconds: number
+}
+
+export type CapacityAdmissionDiagnostics = {
+  enabled: boolean
+  minimumDiskAvailableBytesAfterWrite: number
+  minimumDiskAvailablePercentAfterWrite: number
+  writableDiskCount: number
+  lowWatermarkDiskCount: number
+  writablePoolCount: number
+  lowWatermarkPoolCount: number
+  largestWritableObjectBytes: number
+}
+
+export type PlacementPolicyDiagnostics = {
+  minimumFaultDomains: number
+  onlineFaultDomainCount: number
+  writableFaultDomainCount: number
+  poolsMeetingFaultDomainPolicy: number
+  poolsBelowFaultDomainPolicy: number
 }
 
 export type ClusterDiagnosticsSummary = {
@@ -305,6 +339,8 @@ export type ClusterDiagnostics = {
   metadata: MetadataDiagnostics
   erasureCoding: ErasureCodingDiagnostics
   internalTransport: ClusterInternalTransportDiagnostics
+  capacityAdmission: CapacityAdmissionDiagnostics
+  placementPolicy: PlacementPolicyDiagnostics
   backgroundTasks: BackgroundTaskSnapshot[]
 }
 

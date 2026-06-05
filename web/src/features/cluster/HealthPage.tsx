@@ -28,6 +28,7 @@ import {
   type BackgroundTaskRunRecord,
   type BackgroundTaskSnapshot,
   type ClusterDiagnostics,
+  type ClusterNodeInfo,
   type ReplicaRepairQueueItemDiagnostics,
   type StorageDiskInfo,
 } from "@/lib/api-client"
@@ -42,6 +43,8 @@ type HealthPageState = {
 type DiskRow = StorageDiskInfo & {
   nodeStatus: string
 }
+
+const EMPTY_HEALTH_NODES: ClusterNodeInfo[] = []
 
 export function HealthPage() {
   const { t } = useTranslation()
@@ -105,8 +108,9 @@ export function HealthPage() {
   const summary = diagnostics?.summary
   const replica = diagnostics?.objectReplicas
   const repair = diagnostics?.repairQueue
+  const metadata = diagnostics?.metadata
   const erasureCoding = diagnostics?.erasureCoding
-  const nodes = diagnostics?.topology.nodes ?? []
+  const nodes = diagnostics?.topology.nodes ?? EMPTY_HEALTH_NODES
   const disks = useMemo<DiskRow[]>(
     () =>
       nodes.flatMap((node) =>
@@ -120,7 +124,7 @@ export function HealthPage() {
   const unhealthyCount =
     (summary?.offlineNodeCount ?? 0)
     + (summary?.offlineDiskCount ?? 0)
-    + (replica?.underReplicatedObjectCount ?? 0)
+    + Math.max(replica?.unrecoverableObjectCount ?? 0, replica?.underReplicatedObjectCount ?? 0)
     + (repair?.failedCount ?? 0)
   const repairStatusSummary = repair?.statuses.length
     ? repair.statuses
@@ -163,9 +167,11 @@ export function HealthPage() {
         <HealthTile
           icon={DatabaseZapIcon}
           label={t("health.metrics.replicas")}
-          value={formatNumber(replica?.missingReplicaFileCount ?? 0)}
-          detail={t("health.metrics.missingReplicaFiles")}
-          tone={(replica?.missingReplicaFileCount ?? 0) > 0 ? "warn" : "ok"}
+          value={formatNumber(replica?.degradedObjectCount ?? 0)}
+          detail={(replica?.unrecoverableObjectCount ?? 0) > 0
+            ? t("health.metrics.unrecoverableObjects", { count: replica?.unrecoverableObjectCount ?? 0 })
+            : t("health.metrics.recoverableDegraded", { count: replica?.recoverableDegradedObjectCount ?? 0 })}
+          tone={(replica?.unrecoverableObjectCount ?? 0) > 0 ? "danger" : (replica?.degradedObjectCount ?? 0) > 0 ? "warn" : "ok"}
         />
         <HealthTile
           icon={AlertTriangleIcon}
@@ -191,6 +197,12 @@ export function HealthPage() {
               facts={[
                 [t("health.diagnostics.desiredReplicas"), formatNumber(replica?.desiredReplicaCount ?? 0)],
                 [t("health.diagnostics.replicaRecords"), formatNumber(replica?.replicaRecordCount ?? 0)],
+                [t("health.diagnostics.degraded"), formatNumber(replica?.degradedObjectCount ?? 0)],
+                [t("health.diagnostics.recoverableDegraded"), formatNumber(replica?.recoverableDegradedObjectCount ?? 0)],
+                [t("health.diagnostics.unrecoverable"), formatNumber(replica?.unrecoverableObjectCount ?? 0)],
+                [t("health.diagnostics.readQuorumLost"), formatNumber(replica?.readQuorumLostObjectCount ?? 0)],
+                [t("health.diagnostics.writeQuorumLost"), formatNumber(replica?.writeQuorumLostObjectCount ?? 0)],
+                [t("health.diagnostics.missingReplicaFiles"), formatNumber(replica?.missingReplicaFileCount ?? 0)],
                 [t("health.diagnostics.underReplicated"), formatNumber(replica?.underReplicatedObjectCount ?? 0)],
                 [t("health.diagnostics.withoutManifest"), formatNumber(replica?.objectsWithoutReplicaManifestCount ?? 0)],
               ]}
@@ -206,6 +218,19 @@ export function HealthPage() {
                 [t("health.diagnostics.statusMix"), repairStatusSummary],
                 [t("health.diagnostics.oldestPending"), repair?.oldestPendingAt ? formatDateTime(repair.oldestPendingAt) : t("health.diagnostics.none")],
                 [t("health.diagnostics.lastUpdated"), repair?.lastUpdatedAt ? formatDateTime(repair.lastUpdatedAt) : t("health.diagnostics.none")],
+              ]}
+            />
+            <DiagnosticBlock
+              title={t("health.diagnostics.metadataTitle")}
+              facts={[
+                [t("health.diagnostics.metaSyncMode"), metadata?.syncMode ?? "-"],
+                [t("health.diagnostics.durableWrites"), metadata?.durableWriteSync ? t("health.diagnostics.yes") : t("health.diagnostics.no")],
+                [t("health.diagnostics.sharedNamespace"), metadata?.sharedNamespace ? t("health.diagnostics.yes") : t("health.diagnostics.no")],
+                [t("health.diagnostics.multiNodeWriteRisk"), metadata?.multiNodeWriteRisk ? t("health.diagnostics.yes") : t("health.diagnostics.no")],
+                [t("health.diagnostics.pendingCommits"), formatNumber(metadata?.pendingCommitCount ?? 0)],
+                [t("health.diagnostics.orphanedReplicaRecords"), formatNumber(metadata?.orphanedReplicaRecordCount ?? 0)],
+                [t("health.diagnostics.walBytes"), formatBytes(metadata?.walBytes ?? 0)],
+                [t("health.diagnostics.keyCount"), formatNumber(metadata?.keyCount ?? 0)],
               ]}
             />
             <DiagnosticBlock
@@ -492,7 +517,7 @@ function HealthTile({
   label: string
   value: string
   detail: string
-  tone: "neutral" | "ok" | "warn"
+  tone: "neutral" | "ok" | "warn" | "danger"
 }) {
   return (
     <Surface className="min-h-32">
@@ -501,6 +526,7 @@ function HealthTile({
           "grid size-9 place-items-center rounded-lg",
           tone === "ok" && "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30",
           tone === "warn" && "bg-amber-50 text-amber-700 dark:bg-amber-950/30",
+          tone === "danger" && "bg-red-50 text-red-700 dark:bg-red-950/30",
           tone === "neutral" && "bg-blue-50 text-blue-700 dark:bg-blue-950/30"
         )}>
           <Icon className="size-4" />

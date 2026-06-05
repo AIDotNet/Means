@@ -87,7 +87,7 @@ Console API 在 `/api/console`，使用 Cookie session，与 S3 access key/secre
 | `IErasureCodingProfileStore` | EC profile 管理 |
 | `IMetadataMaintenanceStore` | metadata snapshot、consistency check、GC、diagnostics |
 | `IStorageMaintenanceOperations` | repair、rebalance、scrub、lifecycle、replication worker 的后台任务入口 |
-| `IObjectPlacementPlanner` | 根据 topology 与 seed 规划对象副本放置 |
+| `IObjectPlacementPlanner` | 根据 topology 与 seed 规划对象副本/EC shard 放置，并保持对象位于单一 storage pool |
 
 这些接口是未来替换存储/元数据实现时必须保持稳定的边界。
 

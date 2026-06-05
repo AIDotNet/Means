@@ -158,6 +158,27 @@ const client = new S3Client({
 
 如果生产环境通过 `/s3/` 前缀暴露数据面，endpoint 也必须包含该路径；否则签名路径和实际路由会不一致。
 
+在新的多节点或负载均衡部署里，建议先跑只读 preflight，再执行写入示例：
+
+```bash
+cd SDKs/examples/typescript
+npm install
+npm run check:s3
+
+dotnet run --project SDKs/examples/csharp-aws-sdk/Means.AwsSdkExamples.csproj -- check
+```
+
+设置 `MEANS_BUCKET` 后，preflight 会额外生成一个 GET 预签名 URL 并检查 origin/path 是否保留 endpoint 的 `/s3/` 等前缀；该 URL 只生成不访问，不要求对象真实存在。可用 `MEANS_PRESIGN_KEY` 指定要检查的 object key。
+
+## 多节点与负载均衡清单
+
+- SDK 流量应指向稳定的 S3 数据面 VIP 或负载均衡地址，不要指向内部 shard RPC 节点。
+- 本地、path prefix 或负载均衡部署默认保持 path-style；只有配置好 bucket DNS/TLS 后再切 virtual-hosted-style。
+- 如果网关把数据面挂在 `/s3/`，客户端、presigner 和反向代理外部地址都必须保留这个 path prefix。
+- 反向代理需要保留 `Host`、path、method、query string 和 URL encoding，因为 SigV4 会签名这些值。
+- 客户端和生成 presigned URL 的服务端使用同一个 signing region，通常为 `us-east-1`。
+- 浏览器或外部系统使用 presigned URL 时，生成 URL 的 SDK endpoint 应是它们可访问的公网/内网负载均衡 origin。
+
 ## 浏览器：只执行 presigned URL
 
 浏览器端不能持有 SecretKey。推荐流程：
@@ -210,6 +231,7 @@ Lifecycle day 值必须是正整数。删除所有规则使用 `deleteBucketLife
 | --- | --- |
 | `SignatureDoesNotMatch` | endpoint host/path、请求方法、query、region、service、系统时间 |
 | presigned PUT 返回 404 | endpoint 是否包含真实 S3 数据面路径，例如 `/s3/` |
+| presigned URL 在负载均衡后失败 | presigner 是否使用外部可达 origin，代理是否保留 host/path/query |
 | 浏览器上传 403 | presigned URL 是否过期，method 是否为 PUT，bucket policy 是否允许 |
 | CORS preflight 失败 | bucket CORS 是否包含来源、方法、header |
 | Multipart complete 失败 | part 顺序、ETag、非最终 part 是否至少 5 MiB |

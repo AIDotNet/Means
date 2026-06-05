@@ -55,6 +55,8 @@ namespace Means.Serialization;
 [JsonSerializable(typeof(ClusterDiagnostics))]
 [JsonSerializable(typeof(ClusterDiagnosticsSummary))]
 [JsonSerializable(typeof(ClusterInternalTransportDiagnostics))]
+[JsonSerializable(typeof(CapacityAdmissionDiagnostics))]
+[JsonSerializable(typeof(PlacementPolicyDiagnostics))]
 [JsonSerializable(typeof(ClusterNodeInfo))]
 [JsonSerializable(typeof(ClusterTopology))]
 [JsonSerializable(typeof(ConsoleHourlyMetric))]

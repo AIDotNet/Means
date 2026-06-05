@@ -45,7 +45,8 @@ public sealed record ClusterNodeInfo(
     string Status,
     DateTimeOffset RegisteredAt,
     DateTimeOffset LastHeartbeatAt,
-    IReadOnlyList<StorageDiskInfo> Disks);
+    IReadOnlyList<StorageDiskInfo> Disks,
+    string FaultDomain = "");
 
 public sealed record ClusterTopology(
     StorageClusterInfo Cluster,
@@ -61,7 +62,8 @@ public sealed record ClusterNodeRegistration(
     string PoolId,
     string PoolName,
     IReadOnlyList<StorageDiskRegistration> Disks,
-    DateTimeOffset RegisteredAt);
+    DateTimeOffset RegisteredAt,
+    string FaultDomain = "");
 
 public sealed record StorageDiskRegistration(
     string DiskId,

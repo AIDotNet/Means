@@ -143,9 +143,9 @@ Console API tests 覆盖：
 
 | 方向 | 状态 |
 | --- | --- |
-| Reed-Solomon EC 写入/读取/重建 | 部分完成：XlFs 普通 `PutObject` 本地 EC 写入与缺失 data shard 读重建已落地；multipart、跨节点 EC 和后台 repair/rebalance 待完成 |
-| 真实多节点分布式 metadata/RPC | 未完成 |
-| 生产级 rebalance 和数据迁移 | 未完成 |
+| Reed-Solomon EC 写入/读取/重建 | 初版完成：XlFs 普通 `PutObject` 与 multipart `UploadPart` 支持本地/跨节点 EC shard、降级写入、读恢复和后台 repair |
+| 真实多节点分布式 metadata/RPC | 部分完成：节点 heartbeat/topology、单 pool 对象放置、内部 shard RPC、跨节点 full-copy/EC 写入与修复已落地；生产级共享 metadata、erasure set/故障域和准入校验仍需完善 |
+| 生产级 rebalance 和数据迁移 | 部分完成：已有基于当前 placement plan 的 shard/manifest 迁移和回滚；仍需扩缩容策略、限速、长任务进度和更大规模故障注入 |
 | IAM/STS | 未完成 |
 | Policy condition | 未完成 |
 | Access key rotation | 未完成 |
@@ -159,7 +159,7 @@ Console API tests 覆盖：
 ## 里程碑建议
 
 1. 单节点生产化 hardening：配置校验、备份恢复演练、兼容矩阵稳定。
-2. 多副本分布式存储：共享 metadata、节点间 RPC、读写 quorum 语义。
-3. EC 和 repair/rebalance：真实 Reed-Solomon 数据路径、自动修复和迁移。
+2. 多副本分布式存储：共享 metadata、节点间 RPC、读写 quorum 语义和跨节点诊断。
+3. EC 和 repair/rebalance：完善自动修复、迁移限速、扩缩容和故障注入。
 4. 安全模型：IAM/STS、access key rotation、RBAC、SSE。
 5. 数据治理：Object Lock、retention、replication、quota。

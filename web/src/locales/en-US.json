@@ -60,8 +60,21 @@
       "cluster": "Cluster",
       "health": "Health"
     },
+    "navDescriptions": {
+      "accessKeys": "S3 credentials",
+      "audit": "Operations and changes",
+      "buckets": "Objects, policy, versions",
+      "cluster": "Topology, pools, maintenance",
+      "dashboard": "Capacity and request overview",
+      "health": "Nodes, disks, repair",
+      "settings": "Endpoints, limits, storage"
+    },
     "product": {
-      "subtitle": "Object storage console"
+      "subtitle": "Object storage console",
+      "workspace": "Admin workspace"
+    },
+    "routeDescriptions": {
+      "bucket": "Objects, policy, versions, and bucket settings"
     },
     "search": {
       "open": "Open search",
@@ -74,6 +87,13 @@
       "governance": "Governance",
       "overview": "Overview",
       "storage": "Storage"
+    },
+    "system": {
+      "erasureCoding": "Erasure coding",
+      "localMetadata": "Local metadata",
+      "online": "Online",
+      "runtime": "Runtime",
+      "s3Api": "S3 API"
     },
     "userMenu": {
       "currentUser": "Current user",
@@ -298,6 +318,7 @@
   "commandSearch": {
     "bucketDescription": "{{count}} objects",
     "description": "Quickly jump to a page or bucket.",
+    "empty": "No matching pages or buckets",
     "emptyBuckets": "No matching buckets",
     "emptyPages": "No matching pages",
     "inputPlaceholder": "Type a page, bucket, or keyword",
@@ -521,8 +542,8 @@
     "sections": {
       "architecture": {
         "currentMode": "Current mode is XlFs with the self-built MeansLogDb metadata engine.",
-        "futureAbstraction": "Server pool, erasure set, and healing/scrub are reserved for distributed evolution.",
-        "title": "Architecture reserved"
+        "futureAbstraction": "Object placement now stays within one server pool; erasure-set fault domains and deeper healing policy continue to evolve.",
+        "title": "Distributed layout"
       },
       "compression": {
         "badges": {
@@ -612,9 +633,24 @@
         "detail": "{{nodes}} nodes and {{disks}} disks online",
         "degraded": "{{nodes}} nodes and {{disks}} disks offline"
       },
+      "metadata": {
+        "title": "Metadata",
+        "detail": "{{mode}} WAL, {{keys}} keys, {{wal}} log",
+        "risk": "{{mode}} local metadata; multi-node ingress has visibility risk"
+      },
+      "capacity": {
+        "title": "Capacity admission",
+        "enabled": "{{writable}} writable disks, {{low}} at low watermark; largest writable {{largest}}",
+        "disabled": "No post-write capacity watermark configured"
+      },
+      "placement": {
+        "title": "Placement policy",
+        "strict": "Requires {{required}} fault domains; {{writable}} writable, {{pools}} pools meet policy",
+        "preferred": "{{writable}} writable fault domains, {{pools}} pools can place"
+      },
       "transport": {
         "title": "Shard RPC",
-        "enabled": "Internal shard endpoint configured, {{limit}} per transfer",
+        "enabled": "Internal shard endpoint configured, {{limit}} per transfer, {{connections}} connections per node, {{timeout}}s timeout, {{lifetime}}s connection lifetime",
         "disabled": "Set an internal cluster token to accept shard transfers"
       },
       "erasureCoding": {
@@ -639,6 +675,7 @@
       "enabled": "Enabled",
       "disabled": "Disabled",
       "maxTransfer": "Maximum shard transfer {{value}}",
+      "rpcPolicy": "Max transfer {{transfer}}; {{connections}} connections per node; {{timeout}}s request timeout; {{lifetime}}s connection lifetime",
       "erasureCoding": "Erasure coding",
       "ecProfiles": "{{enabled}} / {{total}} enabled",
       "ecDetail": "Current writes use Reed-Solomon shards on local XlFs disks.",
@@ -648,6 +685,32 @@
       "routing": "S3 routing",
       "pending": "Pending",
       "routingDetail": "Keep production load balancing off until placement is cross-node aware."
+    },
+    "maintenance": {
+      "title": "Maintenance operations",
+      "loading": "Loading maintenance tasks...",
+      "empty": "No maintenance tasks registered",
+      "value": "{{running}} running / {{failed}} failed",
+      "none": "-",
+      "signals": {
+        "repairQueue": "Repair queue",
+        "pendingFailed": "{{pending}} pending / {{failed}} failed",
+        "repairQueueDetail": "{{total}} total queue records, {{retryable}} retryable failures",
+        "rebalance": "Rebalance",
+        "noRun": "No run recorded",
+        "lastCompleted": "Last completed {{value}}",
+        "rebalanceDetail": "Moves object shards toward the current placement plan.",
+        "background": "Background tasks",
+        "taskMix": "{{repair}} repair / {{total}} maintenance",
+        "taskDetail": "{{success}} successful runs, {{failure}} failed runs"
+      },
+      "columns": {
+        "task": "Task",
+        "status": "Status",
+        "result": "Last result",
+        "lastRun": "Last run",
+        "action": "Action"
+      }
     },
     "topologyMap": {
       "title": "Topology map",
@@ -665,6 +728,7 @@
       "empty": "No registered nodes",
       "columns": {
         "node": "Node",
+        "faultDomain": "Fault domain",
         "endpoint": "Endpoint",
         "disks": "Disks",
         "lastHeartbeat": "Last heartbeat",
@@ -715,6 +779,8 @@
       "onlineOffline": "{{online}} online / {{offline}} offline",
       "replicas": "Replicas",
       "missingReplicaFiles": "Missing replica files",
+      "recoverableDegraded": "{{count}} recoverable degraded",
+      "unrecoverableObjects": "{{count}} unrecoverable",
       "repairQueue": "Repair queue",
       "failedRepairs": "{{count}} failed repairs"
     },
@@ -737,6 +803,12 @@
       "replicaTitle": "Replica integrity",
       "desiredReplicas": "Desired replicas",
       "replicaRecords": "Replica records",
+      "degraded": "Degraded objects",
+      "recoverableDegraded": "Recoverable degraded",
+      "unrecoverable": "Unrecoverable",
+      "readQuorumLost": "Read quorum lost",
+      "writeQuorumLost": "Write quorum lost",
+      "missingReplicaFiles": "Missing files",
       "underReplicated": "Under replicated",
       "withoutManifest": "Without manifest",
       "repairTitle": "Repair queue",
@@ -749,6 +821,17 @@
       "oldestPending": "Oldest pending",
       "lastUpdated": "Last updated",
       "none": "-",
+      "yes": "Yes",
+      "no": "No",
+      "metadataTitle": "Metadata",
+      "metaSyncMode": "WAL sync",
+      "durableWrites": "Durable writes",
+      "sharedNamespace": "Shared namespace",
+      "multiNodeWriteRisk": "Multi-node write risk",
+      "pendingCommits": "Pending commits",
+      "orphanedReplicaRecords": "Orphaned replica records",
+      "walBytes": "WAL size",
+      "keyCount": "Key count",
       "ecTitle": "Erasure coding",
       "ecProfiles": "Profiles",
       "ecEnabled": "Enabled",

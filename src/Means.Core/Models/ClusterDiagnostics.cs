@@ -9,6 +9,8 @@ public sealed record ClusterDiagnostics(
     MetadataDiagnostics Metadata,
     ErasureCodingDiagnostics ErasureCoding,
     ClusterInternalTransportDiagnostics InternalTransport,
+    CapacityAdmissionDiagnostics CapacityAdmission,
+    PlacementPolicyDiagnostics PlacementPolicy,
     IReadOnlyList<BackgroundTaskSnapshot> BackgroundTasks);
 
 public sealed record ClusterDiagnosticsSummary(
@@ -35,7 +37,12 @@ public sealed record ObjectReplicaDiagnostics(
     long MissingReplicaFileCount,
     long MissingReplicaObjectCount,
     long UnderReplicatedObjectCount,
-    long ObjectsWithoutReplicaManifestCount);
+    long ObjectsWithoutReplicaManifestCount,
+    long DegradedObjectCount,
+    long RecoverableDegradedObjectCount,
+    long UnrecoverableObjectCount,
+    long ReadQuorumLostObjectCount,
+    long WriteQuorumLostObjectCount);
 
 public sealed record ReplicaRepairQueueDiagnostics(
     long TotalCount,
@@ -66,7 +73,13 @@ public sealed record ReplicaRepairQueueItemDiagnostics(
 
 public sealed record MetadataDiagnostics(
     long PendingCommitCount,
-    long OrphanedReplicaRecordCount);
+    long OrphanedReplicaRecordCount,
+    string SyncMode,
+    bool DurableWriteSync,
+    bool SharedNamespace,
+    bool MultiNodeWriteRisk,
+    long WalBytes,
+    long KeyCount);
 
 public sealed record ErasureCodingDiagnostics(
     long ProfileCount,
@@ -75,4 +88,24 @@ public sealed record ErasureCodingDiagnostics(
 
 public sealed record ClusterInternalTransportDiagnostics(
     bool ShardRpcEnabled,
-    long MaxShardTransferBytes);
+    long MaxShardTransferBytes,
+    int ShardRpcMaxConnectionsPerNode,
+    int ShardRpcRequestTimeoutSeconds,
+    int ShardRpcPooledConnectionLifetimeSeconds);
+
+public sealed record CapacityAdmissionDiagnostics(
+    bool Enabled,
+    long MinimumDiskAvailableBytesAfterWrite,
+    double MinimumDiskAvailablePercentAfterWrite,
+    int WritableDiskCount,
+    int LowWatermarkDiskCount,
+    int WritablePoolCount,
+    int LowWatermarkPoolCount,
+    long LargestWritableObjectBytes);
+
+public sealed record PlacementPolicyDiagnostics(
+    int MinimumFaultDomains,
+    int OnlineFaultDomainCount,
+    int WritableFaultDomainCount,
+    int PoolsMeetingFaultDomainPolicy,
+    int PoolsBelowFaultDomainPolicy);

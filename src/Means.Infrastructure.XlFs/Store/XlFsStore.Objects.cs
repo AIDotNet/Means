@@ -442,8 +442,11 @@ public sealed partial class XlFsStore
             cancellationToken);
         var shards = erasureWrite?.Shards
             ?? await WriteFullCopyShardsAsync(
+                bucketName,
+                key,
+                objectId,
                 sourcePath,
-                disk => ObjectRelativePath(bucketName, objectId, disk.SetIndex),
+                setIndex => ObjectRelativePath(bucketName, objectId, setIndex),
                 length,
                 checksum,
                 "Insufficient online disks for write quorum.",
@@ -481,6 +484,11 @@ public sealed partial class XlFsStore
                 await DeleteObjectFilesQuietlyAsync(existing, CancellationToken.None);
             }
 
+            if (erasureWrite is { FailedShardCount: > 0 })
+            {
+                await TryQueueHealAsync(ToObjectInfo(record), "ErasureWriteDegraded", cancellationToken);
+            }
+
             return ToObjectInfo(record);
         }
         catch
@@ -511,6 +519,22 @@ public sealed partial class XlFsStore
             Convert.ToHexString(md5.GetHashAndReset()).ToLowerInvariant(),
             Convert.ToHexString(sha256.GetHashAndReset()).ToLowerInvariant(),
             length);
+    }
+
+    private async Task TryQueueHealAsync(ObjectInfo info, string reason, CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+
+        try
+        {
+            await QueueHealAsync(info, reason, cancellationToken);
+        }
+        catch
+        {
+        }
     }
 
     private async Task<string> GetBucketVersioningStatusAsync(string bucketName, CancellationToken cancellationToken)

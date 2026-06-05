@@ -120,6 +120,30 @@ public sealed class XlFsStoreTests
     }
 
     [Fact]
+    public async Task LogDbStatsReportSyncModeWalSizeAndKeyCount()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            await using var db = await MeansLogDb.OpenAsync(root, CancellationToken.None, XlMetaSyncModes.Batch);
+            await db.PutBatchAsync([
+                new LogDbMutation("stats:a", Encoding.UTF8.GetBytes("1"), false),
+                new LogDbMutation("stats:b", Encoding.UTF8.GetBytes("2"), false)
+            ], CancellationToken.None);
+
+            var stats = db.GetStats();
+
+            Assert.Equal(XlMetaSyncModes.Batch, stats.SyncMode);
+            Assert.Equal(2, stats.KeyCount);
+            Assert.True(stats.WalBytes > 0);
+        }
+        finally
+        {
+            DeleteTempRoot(root);
+        }
+    }
+
+    [Fact]
     public async Task XlFsObjectLifecycleUsesDiskFormatManifestAndLogDb()
     {
         var root = CreateTempRoot();
@@ -262,6 +286,109 @@ public sealed class XlFsStoreTests
     }
 
     [Fact]
+    public async Task XlFsErasureCodingCommitsDegradedRemoteWriteWhenQuorumRemains()
+    {
+        var root = CreateTempRoot();
+        var transport = new InMemoryClusterShardTransport();
+        transport.FailShardWriteDiskIds.Add("remote-disk-01");
+        var planner = new FixedPlacementPlanner(
+            ("local", "disk-00"),
+            ("remote-a", "remote-disk-00"),
+            ("remote-a", "remote-disk-01"));
+        try
+        {
+            await using var store = CreateStore(root, planner, transport);
+            await store.CreateBucketAsync("ec", CancellationToken.None);
+            await RegisterClusterTopologyAsync(store, root);
+            var payload = Enumerable.Range(0, 256 * 1024)
+                .Select(index => (byte)(index % 193))
+                .ToArray();
+
+            await store.PutObjectAsync(new PutObjectRequest(
+                "ec",
+                "degraded-write.bin",
+                new MemoryStream(payload),
+                "application/octet-stream",
+                new Dictionary<string, string>(),
+                null,
+                null), CancellationToken.None);
+
+            var manifest = await ReadFirstXlManifestAsync(root);
+            Assert.Equal(3, manifest.Parts[0].Shards.Count);
+            var missingParityShard = manifest.Parts[0].Shards.Single(shard => shard.DiskId == "remote-disk-01");
+            Assert.False(transport.HasShard(missingParityShard));
+            Assert.Equal(1, transport.WrittenShardCount);
+
+            await using (var data = await store.GetObjectAsync("ec", "degraded-write.bin", CancellationToken.None))
+            {
+                using var buffer = new MemoryStream();
+                await data.Content.CopyToAsync(buffer);
+                Assert.Equal(payload, buffer.ToArray());
+            }
+
+            var consistency = await store.CheckMetadataConsistencyAsync(repair: true, 100, CancellationToken.None);
+            Assert.Equal(1, consistency.MissingReplicaFileCount);
+            Assert.Equal(1, consistency.QueuedReplicaRepairCount);
+
+            var diagnostics = await store.GetClusterDiagnosticsAsync(DateTimeOffset.UtcNow.Subtract(TimeSpan.FromMinutes(1)), CancellationToken.None);
+            Assert.Equal(1, diagnostics.ObjectReplicas.MissingReplicaFileCount);
+            Assert.Equal(1, diagnostics.ObjectReplicas.DegradedObjectCount);
+            Assert.Equal(1, diagnostics.ObjectReplicas.RecoverableDegradedObjectCount);
+            Assert.Equal(0, diagnostics.ObjectReplicas.UnrecoverableObjectCount);
+            Assert.Equal(0, diagnostics.ObjectReplicas.ReadQuorumLostObjectCount);
+            Assert.Equal(0, diagnostics.ObjectReplicas.WriteQuorumLostObjectCount);
+
+            transport.FailShardWriteDiskIds.Clear();
+            var repaired = await store.RebuildErasureCodedObjectsAsync(100, CancellationToken.None);
+            Assert.Equal(1, repaired);
+            Assert.True(transport.HasShard(missingParityShard));
+        }
+        finally
+        {
+            DeleteTempRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task XlFsErasureCodingRollsBackWhenRemoteWriteQuorumIsLost()
+    {
+        var root = CreateTempRoot();
+        var transport = new InMemoryClusterShardTransport();
+        transport.FailShardWriteDiskIds.Add("remote-disk-00");
+        transport.FailShardWriteDiskIds.Add("remote-disk-01");
+        var planner = new FixedPlacementPlanner(
+            ("local", "disk-00"),
+            ("remote-a", "remote-disk-00"),
+            ("remote-a", "remote-disk-01"));
+        try
+        {
+            await using var store = CreateStore(root, planner, transport);
+            await store.CreateBucketAsync("ec", CancellationToken.None);
+            await RegisterClusterTopologyAsync(store, root);
+            var payload = Enumerable.Range(0, 256 * 1024)
+                .Select(index => (byte)(index % 181))
+                .ToArray();
+
+            await Assert.ThrowsAsync<MeansException>(() => store.PutObjectAsync(new PutObjectRequest(
+                "ec",
+                "quorum-lost.bin",
+                new MemoryStream(payload),
+                "application/octet-stream",
+                new Dictionary<string, string>(),
+                null,
+                null), CancellationToken.None));
+
+            Assert.Equal(0, transport.WrittenShardCount);
+            Assert.Empty(Directory.EnumerateFiles(root, "xl.meta", SearchOption.AllDirectories));
+            await Assert.ThrowsAsync<MeansException>(() => store.GetObjectAsync("ec", "quorum-lost.bin", CancellationToken.None));
+        }
+        finally
+        {
+            DeleteTempRoot(root);
+        }
+    }
+
+    [Fact]
     public async Task XlFsErasureCodingCleansRemoteShardsWhenManifestReplicationFails()
     {
         var root = CreateTempRoot();
@@ -295,6 +422,155 @@ public sealed class XlFsStoreTests
             Assert.Equal(2, transport.DeletedShardCount);
             Assert.Equal(0, transport.WrittenManifestCount);
             await Assert.ThrowsAsync<MeansException>(() => store.GetObjectAsync("ec", "rollback.bin", CancellationToken.None));
+        }
+        finally
+        {
+            DeleteTempRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task XlFsFullCopyWritesAndDeletesRemoteClusterReplicas()
+    {
+        var root = CreateTempRoot();
+        var transport = new InMemoryClusterShardTransport();
+        var planner = new FixedPlacementPlanner(
+            ("local", "disk-00"),
+            ("remote-a", "remote-disk-00"),
+            ("remote-a", "remote-disk-01"));
+        try
+        {
+            await using var store = CreateStore(root, planner, transport, erasureDataShards: 1, erasureParityShards: 0);
+            await store.CreateBucketAsync("objects", CancellationToken.None);
+            await RegisterClusterTopologyAsync(store, root);
+            var payload = Encoding.UTF8.GetBytes("full-copy remote replica payload");
+
+            await store.PutObjectAsync(new PutObjectRequest(
+                "objects",
+                "remote-full-copy.txt",
+                new MemoryStream(payload),
+                "text/plain",
+                new Dictionary<string, string>(),
+                null,
+                null), CancellationToken.None);
+
+            var manifest = await ReadFirstXlManifestAsync(root);
+            Assert.Equal("full-copy-v1", manifest.Erasure.Algorithm);
+            Assert.Contains(manifest.Parts[0].Shards, shard => shard.DiskId == "remote-disk-00");
+            Assert.Contains(manifest.Parts[0].Shards, shard => shard.DiskId == "remote-disk-01");
+            Assert.Equal(2, transport.WrittenShardCount);
+            Assert.Equal(2, transport.WrittenManifestCount);
+
+            await using (var data = await store.GetObjectAsync("objects", "remote-full-copy.txt", CancellationToken.None))
+            {
+                using var buffer = new MemoryStream();
+                await data.Content.CopyToAsync(buffer);
+                Assert.Equal(payload, buffer.ToArray());
+            }
+
+            await store.DeleteObjectAsync("objects", "remote-full-copy.txt", CancellationToken.None);
+            Assert.Equal(2, transport.DeletedShardCount);
+            Assert.Equal(2, transport.DeletedManifestCount);
+            Assert.Equal(0, transport.StoredShardCount);
+        }
+        finally
+        {
+            DeleteTempRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task XlFsFullCopyRepairRestoresMissingRemoteReplica()
+    {
+        var root = CreateTempRoot();
+        var transport = new InMemoryClusterShardTransport();
+        var planner = new FixedPlacementPlanner(
+            ("local", "disk-00"),
+            ("remote-a", "remote-disk-00"),
+            ("remote-a", "remote-disk-01"));
+        try
+        {
+            await using var store = CreateStore(root, planner, transport, erasureDataShards: 1, erasureParityShards: 0);
+            await store.CreateBucketAsync("objects", CancellationToken.None);
+            await RegisterClusterTopologyAsync(store, root);
+            var payload = Encoding.UTF8.GetBytes("full-copy repair remote replica payload");
+
+            await store.PutObjectAsync(new PutObjectRequest(
+                "objects",
+                "repair-full-copy.txt",
+                new MemoryStream(payload),
+                "text/plain",
+                new Dictionary<string, string>(),
+                null,
+                null), CancellationToken.None);
+
+            var manifest = await ReadFirstXlManifestAsync(root);
+            var remoteShard = manifest.Parts[0].Shards.Single(shard => shard.DiskId == "remote-disk-01");
+            Assert.True(transport.RemoveShard(remoteShard));
+
+            var consistency = await store.CheckMetadataConsistencyAsync(repair: true, 100, CancellationToken.None);
+            Assert.Equal(1, consistency.MissingReplicaFileCount);
+            Assert.Equal(1, consistency.QueuedReplicaRepairCount);
+
+            var repaired = await store.RepairQueuedReplicasAsync(100, CancellationToken.None);
+            Assert.Equal(1, repaired);
+            Assert.True(transport.HasShard(remoteShard));
+            Assert.True(transport.WrittenShardCount >= 3);
+
+            var repairedConsistency = await store.CheckMetadataConsistencyAsync(repair: true, 100, CancellationToken.None);
+            Assert.Equal(0, repairedConsistency.MissingReplicaFileCount);
+            Assert.Equal(0, repairedConsistency.MissingReplicaManifestCount);
+
+            await using var data = await store.GetObjectAsync("objects", "repair-full-copy.txt", CancellationToken.None);
+            using var buffer = new MemoryStream();
+            await data.Content.CopyToAsync(buffer);
+            Assert.Equal(payload, buffer.ToArray());
+        }
+        finally
+        {
+            DeleteTempRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task XlFsMultipartFullCopyCleansRemotePartReplicasOnAbort()
+    {
+        var root = CreateTempRoot();
+        var transport = new InMemoryClusterShardTransport();
+        var planner = new FixedPlacementPlanner(
+            ("local", "disk-00"),
+            ("remote-a", "remote-disk-00"),
+            ("remote-a", "remote-disk-01"));
+        try
+        {
+            await using var store = CreateStore(root, planner, transport, erasureDataShards: 1, erasureParityShards: 0);
+            await store.CreateBucketAsync("media", CancellationToken.None);
+            await RegisterClusterTopologyAsync(store, root);
+            var upload = await store.InitiateMultipartUploadAsync(new InitiateMultipartUploadRequest(
+                "media",
+                "remote-part.bin",
+                "application/octet-stream",
+                new Dictionary<string, string>(),
+                null,
+                null), CancellationToken.None);
+            var payload = Enumerable.Range(0, 128 * 1024)
+                .Select(index => (byte)(index % 251))
+                .ToArray();
+
+            await store.UploadPartAsync(new UploadPartRequest(
+                "media",
+                "remote-part.bin",
+                upload.UploadId,
+                1,
+                new MemoryStream(payload)), CancellationToken.None);
+
+            Assert.Equal(2, transport.WrittenShardCount);
+            Assert.Equal(2, transport.StoredShardCount);
+
+            await store.AbortMultipartUploadAsync("media", "remote-part.bin", upload.UploadId, CancellationToken.None);
+
+            Assert.Equal(2, transport.DeletedShardCount);
+            Assert.Equal(0, transport.StoredShardCount);
         }
         finally
         {
@@ -346,6 +622,117 @@ public sealed class XlFsStoreTests
             using var buffer = new MemoryStream();
             await data.Content.CopyToAsync(buffer);
             Assert.Equal(payload, buffer.ToArray());
+        }
+        finally
+        {
+            DeleteTempRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task XlFsRebalanceMovesErasureShardToPlannedDisk()
+    {
+        var root = CreateTempRoot();
+        var transport = new InMemoryClusterShardTransport();
+        var planner = new SwitchablePlacementPlanner(
+            ("local", "disk-00"),
+            ("remote-a", "remote-disk-00"),
+            ("remote-a", "remote-disk-01"));
+        try
+        {
+            await using var store = CreateStore(root, planner, transport);
+            await store.CreateBucketAsync("ec", CancellationToken.None);
+            await RegisterClusterTopologyAsync(store, root);
+            var payload = Enumerable.Range(0, 256 * 1024)
+                .Select(index => (byte)(index % 227))
+                .ToArray();
+
+            await store.PutObjectAsync(new PutObjectRequest(
+                "ec",
+                "rebalance.bin",
+                new MemoryStream(payload),
+                "application/octet-stream",
+                new Dictionary<string, string>(),
+                null,
+                null), CancellationToken.None);
+
+            var before = await ReadFirstXlManifestAsync(root);
+            var oldParityShard = before.Parts[0].Shards.Single(shard => shard.SetIndex == 2);
+            Assert.Equal("remote-disk-01", oldParityShard.DiskId);
+            Assert.True(transport.HasShard(oldParityShard));
+
+            planner.SetPlacements(
+                ("local", "disk-00"),
+                ("remote-a", "remote-disk-00"),
+                ("local", "disk-01"));
+
+            var migrated = await store.RebalanceObjectReplicasAsync(100, CancellationToken.None);
+            Assert.Equal(1, migrated);
+
+            var after = await ReadFirstXlManifestAsync(root);
+            var rebalancedParityShard = after.Parts[0].Shards.Single(shard => shard.SetIndex == 2);
+            Assert.Equal("disk-01", rebalancedParityShard.DiskId);
+            Assert.True(File.Exists(ResolveShardPath(root, rebalancedParityShard)));
+            Assert.False(transport.HasShard(oldParityShard));
+
+            await using var data = await store.GetObjectAsync("ec", "rebalance.bin", CancellationToken.None);
+            using var buffer = new MemoryStream();
+            await data.Content.CopyToAsync(buffer);
+            Assert.Equal(payload, buffer.ToArray());
+
+            var consistency = await store.CheckMetadataConsistencyAsync(repair: true, 100, CancellationToken.None);
+            Assert.Equal(0, consistency.MissingReplicaFileCount);
+            Assert.Equal(0, consistency.MissingReplicaManifestCount);
+        }
+        finally
+        {
+            DeleteTempRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task XlFsRebalanceRespectsMaxItems()
+    {
+        var root = CreateTempRoot();
+        var transport = new InMemoryClusterShardTransport();
+        var planner = new SwitchablePlacementPlanner(
+            ("local", "disk-00"),
+            ("remote-a", "remote-disk-00"),
+            ("remote-a", "remote-disk-01"));
+        try
+        {
+            await using var store = CreateStore(root, planner, transport);
+            await store.CreateBucketAsync("ec", CancellationToken.None);
+            await RegisterClusterTopologyAsync(store, root);
+
+            for (var item = 0; item < 2; item++)
+            {
+                var payload = Enumerable.Range(0, 128 * 1024)
+                    .Select(index => (byte)((index + item) % 251))
+                    .ToArray();
+                await store.PutObjectAsync(new PutObjectRequest(
+                    "ec",
+                    "rebalance-" + item + ".bin",
+                    new MemoryStream(payload),
+                    "application/octet-stream",
+                    new Dictionary<string, string>(),
+                    null,
+                    null), CancellationToken.None);
+            }
+
+            planner.SetPlacements(
+                ("local", "disk-00"),
+                ("remote-a", "remote-disk-00"),
+                ("local", "disk-01"));
+
+            var migrated = await store.RebalanceObjectReplicasAsync(1, CancellationToken.None);
+            Assert.Equal(1, migrated);
+
+            var manifests = await ReadXlManifestsAsync(root);
+            var rebalancedObjects = manifests
+                .GroupBy(manifest => manifest.ObjectId, StringComparer.Ordinal)
+                .Count(group => group.First().Parts[0].Shards.Any(shard => shard.SetIndex == 2 && shard.DiskId == "disk-01"));
+            Assert.Equal(1, rebalancedObjects);
         }
         finally
         {
@@ -614,6 +1001,72 @@ public sealed class XlFsStoreTests
     }
 
     [Fact]
+    public async Task XlFsMultipartErasureCodingReadsMultiplePartsWithMissingDataShard()
+    {
+        var root = CreateTempRoot();
+        var transport = new InMemoryClusterShardTransport();
+        var planner = new FixedPlacementPlanner(
+            ("local", "disk-00"),
+            ("remote-a", "remote-disk-00"),
+            ("remote-a", "remote-disk-01"));
+        try
+        {
+            await using var store = CreateStore(root, planner, transport);
+            await store.CreateBucketAsync("media", CancellationToken.None);
+            await RegisterClusterTopologyAsync(store, root);
+            var upload = await store.InitiateMultipartUploadAsync(new InitiateMultipartUploadRequest(
+                "media",
+                "ec-movie.bin",
+                "application/octet-stream",
+                new Dictionary<string, string>(),
+                null,
+                null), CancellationToken.None);
+
+            var first = Enumerable.Range(0, 5 * 1024 * 1024)
+                .Select(index => (byte)(index % 251))
+                .ToArray();
+            var second = Enumerable.Range(0, 257 * 1024)
+                .Select(index => (byte)(255 - index % 251))
+                .ToArray();
+            var part1 = await store.UploadPartAsync(new UploadPartRequest("media", "ec-movie.bin", upload.UploadId, 1, new MemoryStream(first)), CancellationToken.None);
+            var part2 = await store.UploadPartAsync(new UploadPartRequest("media", "ec-movie.bin", upload.UploadId, 2, new MemoryStream(second)), CancellationToken.None);
+
+            var info = await store.CompleteMultipartUploadAsync(new CompleteMultipartUploadRequest(
+                "media",
+                "ec-movie.bin",
+                upload.UploadId,
+                [new CompletedMultipartPart(1, part1.ETag), new CompletedMultipartPart(2, part2.ETag)]), CancellationToken.None);
+
+            Assert.EndsWith("-2", info.ETag);
+            Assert.Equal(first.Length + second.Length, info.ContentLength);
+            var manifest = await ReadFirstXlManifestAsync(root);
+            Assert.Equal("reed-solomon-v1", manifest.Erasure.Algorithm);
+            Assert.Equal(2, manifest.Parts.Count);
+            Assert.All(manifest.Parts, part => Assert.Equal(3, part.Shards.Count));
+            Assert.Equal(4, transport.WrittenShardCount);
+
+            var firstDataShard = manifest.Parts[0].Shards.Single(shard => shard.SetIndex == 0);
+            File.Delete(ResolveShardPath(root, firstDataShard));
+
+            await using (var data = await store.GetObjectAsync("media", "ec-movie.bin", CancellationToken.None))
+            {
+                using var buffer = new MemoryStream();
+                await data.Content.CopyToAsync(buffer);
+                Assert.Equal(first.Concat(second).ToArray(), buffer.ToArray());
+            }
+
+            var diagnostics = await store.GetClusterDiagnosticsAsync(DateTimeOffset.UtcNow.Subtract(TimeSpan.FromMinutes(1)), CancellationToken.None);
+            Assert.Equal(1, diagnostics.ObjectReplicas.DegradedObjectCount);
+            Assert.Equal(1, diagnostics.ObjectReplicas.RecoverableDegradedObjectCount);
+            Assert.Equal(0, diagnostics.ObjectReplicas.UnrecoverableObjectCount);
+        }
+        finally
+        {
+            DeleteTempRoot(root);
+        }
+    }
+
+    [Fact]
     public async Task XlFsMultipartRejectsInvalidPartOrder()
     {
         var root = CreateTempRoot();
@@ -649,7 +1102,9 @@ public sealed class XlFsStoreTests
         string root,
         IObjectPlacementPlanner? placementPlanner = null,
         IClusterShardTransport? shardTransport = null,
-        int replicaRepairMaxAttempts = 5)
+        int replicaRepairMaxAttempts = 5,
+        int erasureDataShards = 2,
+        int erasureParityShards = 1)
     {
         var options = Options.Create(new XlFsOptions
         {
@@ -662,8 +1117,8 @@ public sealed class XlFsStoreTests
             ],
             DeploymentId = "unit-test",
             SetId = "set-1",
-            ErasureDataShards = 2,
-            ErasureParityShards = 1,
+            ErasureDataShards = erasureDataShards,
+            ErasureParityShards = erasureParityShards,
             WriteQuorum = 2,
             ReadQuorum = 1,
             DefaultAccessKey = "meansadmin",
@@ -730,6 +1185,18 @@ public sealed class XlFsStoreTests
         var manifestPath = Directory.EnumerateFiles(root, "xl.meta", SearchOption.AllDirectories).First();
         return JsonSerializer.Deserialize<XlObjectManifest>(await File.ReadAllTextAsync(manifestPath))
             ?? throw new InvalidOperationException("Test manifest could not be parsed.");
+    }
+
+    private static async Task<IReadOnlyList<XlObjectManifest>> ReadXlManifestsAsync(string root)
+    {
+        var manifests = new List<XlObjectManifest>();
+        foreach (var manifestPath in Directory.EnumerateFiles(root, "xl.meta", SearchOption.AllDirectories))
+        {
+            manifests.Add(JsonSerializer.Deserialize<XlObjectManifest>(await File.ReadAllTextAsync(manifestPath))
+                ?? throw new InvalidOperationException("Test manifest could not be parsed."));
+        }
+
+        return manifests;
     }
 
     private static string ResolveShardPath(string root, XlShardManifest shard)
@@ -811,6 +1278,39 @@ public sealed class XlFsStoreTests
         }
     }
 
+    private sealed class SwitchablePlacementPlanner(params (string NodeId, string DiskId)[] initialPlacements) : IObjectPlacementPlanner
+    {
+        private (string NodeId, string DiskId)[] _placements = initialPlacements;
+
+        public void SetPlacements(params (string NodeId, string DiskId)[] placements)
+        {
+            _placements = placements;
+        }
+
+        public ObjectPlacementPlan PlanPlacement(ObjectPlacementRequest request, ClusterTopology topology)
+        {
+            var disks = topology.Nodes
+                .SelectMany(node => node.Disks.Select(disk => (node.NodeId, Disk: disk)))
+                .ToDictionary(item => (item.NodeId, item.Disk.DiskId), item => item.Disk);
+            return new ObjectPlacementPlan(
+                request.BucketName,
+                request.ObjectKey,
+                request.VersionId,
+                _placements.Take(request.ReplicaCount)
+                    .Select((placement, index) =>
+                    {
+                        var disk = disks[(placement.NodeId, placement.DiskId)];
+                        return new ObjectPlacementReplica(
+                            index,
+                            placement.NodeId,
+                            placement.DiskId,
+                            disk.PoolId,
+                            disk.MountPath);
+                    })
+                    .ToArray());
+        }
+    }
+
     private sealed class InMemoryClusterShardTransport : IClusterShardTransport
     {
         private readonly object _gate = new();
@@ -830,6 +1330,10 @@ public sealed class XlFsStoreTests
 
         public bool FailShardWrites { get; set; }
 
+        public HashSet<string> FailShardWriteDiskIds { get; } = new(StringComparer.Ordinal);
+
+        public HashSet<string> FailManifestWriteDiskIds { get; } = new(StringComparer.Ordinal);
+
         public int WrittenShardCount => _writtenShardCount;
 
         public int WrittenManifestCount => _writtenManifestCount;
@@ -843,6 +1347,17 @@ public sealed class XlFsStoreTests
         public int DeletedShardCount => _deletedShardCount;
 
         public int DeletedManifestCount => _deletedManifestCount;
+
+        public int StoredShardCount
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _shards.Count;
+                }
+            }
+        }
 
         public bool RemoveShard(XlShardManifest shard)
         {
@@ -885,7 +1400,7 @@ public sealed class XlFsStoreTests
             string expectedChecksumSha256,
             CancellationToken cancellationToken)
         {
-            if (FailShardWrites)
+            if (FailShardWrites || FailShardWriteDiskIds.Contains(diskId))
             {
                 throw new MeansException(MeansErrorCodes.SlowDown, "Simulated shard replication failure.", 503);
             }
@@ -988,7 +1503,7 @@ public sealed class XlFsStoreTests
             string expectedChecksumSha256,
             CancellationToken cancellationToken)
         {
-            if (FailManifestWrites)
+            if (FailManifestWrites || FailManifestWriteDiskIds.Contains(diskId))
             {
                 throw new MeansException(MeansErrorCodes.SlowDown, "Simulated manifest replication failure.", 503);
             }

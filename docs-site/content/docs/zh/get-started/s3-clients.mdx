@@ -15,9 +15,19 @@ Virtual-hosted:    http(s)://{bucket}.means.local/{key}
 
 本地开发通常先使用同源 alias；生产环境更适合 virtual-hosted-style。
 
+对于本地、path prefix 或负载均衡部署，除非已经为 bucket DNS/TLS 配好 virtual-hosted-style，否则建议保持 path-style。如果 S3 数据面挂在 `/s3/` 下，所有 SDK endpoint 和 presigner endpoint 都要包含这个前缀。
+
 ## 凭证
 
 Node 和服务端 SDK 可以使用 SigV4 header signing 或 query presigning。浏览器端 SDK 不应持有 secret key，应使用匿名策略或预签名 URL。
+
+## 多节点端点清单
+
+- SDK 流量指向稳定的 S3 数据面 VIP 或负载均衡地址，不要指向内部 cluster shard RPC endpoint。
+- 反向代理需要保留 `Host`、path、method、query string 和 URL encoding，因为 SigV4 会签名这些值。
+- 生成 presigned URL 时使用浏览器或外部客户端实际可访问的 origin 和 path prefix。
+- 客户端与 presigner 使用一致的 signing region，通常为 `us-east-1`。
+- 写入压测前先运行 `SDKs/examples/typescript` 的 `npm run check:s3`，或 C# AWS SDK 示例的 `-- check` 模式。
 
 ## 客户端兼容目标
 

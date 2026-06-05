@@ -9,11 +9,17 @@ import { api, type Session } from "@/lib/api-client"
 import { parseRoute, routeHref, type AppRoute } from "@/lib/routes"
 import { useTranslation } from "@/i18n"
 
-function lazyNamedPage<M extends Record<string, ComponentType<any>>, K extends keyof M>(
+type NamedLazyComponent<T> = T extends ComponentType<infer TProps> ? ComponentType<TProps> : never
+
+function lazyNamedPage<M, K extends keyof M>(
   importer: () => Promise<M>,
   exportName: K
 ) {
-  return lazy(() => importer().then((module) => ({ default: module[exportName] })))
+  return lazy(() =>
+    importer().then((module) => ({
+      default: module[exportName] as NamedLazyComponent<M[K]>,
+    }))
+  )
 }
 
 const DashboardPage = lazyNamedPage(() => import("@/features/dashboard/DashboardPage"), "DashboardPage")

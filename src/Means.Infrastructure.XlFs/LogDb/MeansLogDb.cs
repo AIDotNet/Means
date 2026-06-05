@@ -127,6 +127,22 @@ public sealed partial class MeansLogDb : IAsyncDisposable
         }
     }
 
+    public LogDbStats GetStats()
+    {
+        _indexLock.EnterReadLock();
+        try
+        {
+            return new LogDbStats(
+                _syncMode,
+                _orderedKeys.Count,
+                File.Exists(_walPath) ? new FileInfo(_walPath).Length : 0);
+        }
+        finally
+        {
+            _indexLock.ExitReadLock();
+        }
+    }
+
     public Task<IReadOnlyList<KeyValuePair<string, byte[]>>> ScanPrefixAsync(string prefix, int limit, string? afterKey, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -471,3 +487,5 @@ public sealed partial class MeansLogDb : IAsyncDisposable
 }
 
 public sealed record LogDbMutation(string Key, byte[]? Value, bool Delete);
+
+public sealed record LogDbStats(string SyncMode, int KeyCount, long WalBytes);

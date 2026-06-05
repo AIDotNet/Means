@@ -107,6 +107,11 @@ public sealed partial class XlFsStore
         long missingReplicaObjects = 0;
         long underReplicated = 0;
         long objectsWithoutReplicaManifest = 0;
+        long degradedObjects = 0;
+        long recoverableDegradedObjects = 0;
+        long unrecoverableObjects = 0;
+        long readQuorumLostObjects = 0;
+        long writeQuorumLostObjects = 0;
         foreach (var record in objects)
         {
             var manifest = await TryReadManifestAsync(record, cancellationToken);
@@ -115,6 +120,9 @@ public sealed partial class XlFsStore
                 missingReplicaObjects++;
                 underReplicated++;
                 objectsWithoutReplicaManifest++;
+                unrecoverableObjects++;
+                readQuorumLostObjects++;
+                writeQuorumLostObjects++;
                 continue;
             }
 
@@ -123,32 +131,81 @@ public sealed partial class XlFsStore
                 objectsWithoutReplicaManifest++;
             }
 
-            var objectExisting = 0;
             var objectMissingFiles = 0;
-            foreach (var shard in manifest.Parts.SelectMany(part => part.Shards))
+            var objectReadQuorumLost = manifest.Parts.Count == 0;
+            var objectWriteQuorumLost = manifest.Parts.Count == 0;
+            var objectUnrecoverable = manifest.Parts.Count == 0;
+            foreach (var part in manifest.Parts)
             {
-                replicaRecords++;
-                var probe = await ProbeShardAsync(shard, verifyChecksum: false, cancellationToken);
-                if (probe.Status == ShardProbeStatus.Available)
+                var partExisting = 0;
+                var availableSetIndexes = new List<int>(part.Shards.Count);
+                foreach (var shard in part.Shards)
                 {
-                    existingReplicaFiles++;
-                    objectExisting++;
+                    replicaRecords++;
+                    var probe = await ProbeShardAsync(shard, verifyChecksum: false, cancellationToken);
+                    if (probe.Status == ShardProbeStatus.Available)
+                    {
+                        existingReplicaFiles++;
+                        partExisting++;
+                        availableSetIndexes.Add(shard.SetIndex);
+                    }
+                    else
+                    {
+                        missingReplicaFiles++;
+                        objectMissingFiles++;
+                    }
                 }
-                else
+
+                var readQuorum = Math.Max(1, manifest.Erasure.ReadQuorum);
+                var writeQuorum = Math.Max(1, manifest.Erasure.WriteQuorum);
+                var partRecoverable = IsReedSolomonErasure(manifest)
+                    ? CanRecoverErasureData(manifest.Erasure.DataShards, availableSetIndexes)
+                    : partExisting >= readQuorum;
+
+                if (!partRecoverable)
                 {
-                    missingReplicaFiles++;
-                    objectMissingFiles++;
+                    objectUnrecoverable = true;
+                }
+
+                if (partExisting < readQuorum || !partRecoverable)
+                {
+                    objectReadQuorumLost = true;
+                }
+
+                if (partExisting < writeQuorum)
+                {
+                    objectWriteQuorumLost = true;
                 }
             }
 
             if (objectMissingFiles > 0)
             {
                 missingReplicaObjects++;
+                degradedObjects++;
+                if (!objectUnrecoverable)
+                {
+                    recoverableDegradedObjects++;
+                }
             }
 
-            if (objectExisting < WriteQuorum)
+            if (objectWriteQuorumLost)
             {
                 underReplicated++;
+            }
+
+            if (objectUnrecoverable)
+            {
+                unrecoverableObjects++;
+            }
+
+            if (objectReadQuorumLost)
+            {
+                readQuorumLostObjects++;
+            }
+
+            if (objectWriteQuorumLost)
+            {
+                writeQuorumLostObjects++;
             }
         }
 
@@ -199,15 +256,140 @@ public sealed partial class XlFsStore
                 missingReplicaFiles,
                 missingReplicaObjects,
                 underReplicated,
-                objectsWithoutReplicaManifest),
+                objectsWithoutReplicaManifest,
+                degradedObjects,
+                recoverableDegradedObjects,
+                unrecoverableObjects,
+                readQuorumLostObjects,
+                writeQuorumLostObjects),
             BuildRepairQueueDiagnostics(healRecords, generatedAt),
-            new MetadataDiagnostics(0, 0),
+            BuildMetadataDiagnostics(topology),
             new ErasureCodingDiagnostics(
                 ecProfiles.Count,
                 ecProfiles.Count(profile => profile.Enabled),
                 ecProfiles.Count(profile => !profile.Enabled)),
-            new ClusterInternalTransportDiagnostics(false, 0),
+            new ClusterInternalTransportDiagnostics(false, 0, 0, 0, 0),
+            BuildCapacityAdmissionDiagnostics(topology),
+            BuildPlacementPolicyDiagnostics(topology),
             []);
+    }
+
+    private MetadataDiagnostics BuildMetadataDiagnostics(ClusterTopology topology)
+    {
+        var stats = Db.GetStats();
+        var syncMode = NormalizeMetaSyncMode(stats.SyncMode);
+        const bool sharedNamespace = false;
+        return new MetadataDiagnostics(
+            0,
+            0,
+            syncMode,
+            string.Equals(syncMode, XlMetaSyncModes.Always, StringComparison.OrdinalIgnoreCase),
+            sharedNamespace,
+            !sharedNamespace && topology.Nodes.Count(node => string.Equals(node.Status, ClusterNodeStatuses.Online, StringComparison.Ordinal)) > 1,
+            stats.WalBytes,
+            stats.KeyCount);
+    }
+
+    private static string NormalizeMetaSyncMode(string? syncMode)
+    {
+        if (string.Equals(syncMode, XlMetaSyncModes.Batch, StringComparison.OrdinalIgnoreCase))
+        {
+            return XlMetaSyncModes.Batch;
+        }
+
+        if (string.Equals(syncMode, XlMetaSyncModes.None, StringComparison.OrdinalIgnoreCase))
+        {
+            return XlMetaSyncModes.None;
+        }
+
+        return XlMetaSyncModes.Always;
+    }
+
+    private CapacityAdmissionDiagnostics BuildCapacityAdmissionDiagnostics(ClusterTopology topology)
+    {
+        var minimumBytes = DiskMinAvailableBytesAfterWrite;
+        var minimumPercent = Math.Clamp(_options.DiskMinAvailablePercentAfterWrite, 0, 95);
+        var onlineDisks = topology.Nodes
+            .Where(node => string.Equals(node.Status, ClusterNodeStatuses.Online, StringComparison.Ordinal))
+            .SelectMany(node => node.Disks)
+            .Where(disk => string.Equals(disk.Status, StorageDiskStatuses.Online, StringComparison.Ordinal))
+            .ToArray();
+        var writableDiskIds = onlineDisks
+            .Where(disk => WritableBytesAfterReserve(disk, minimumBytes, minimumPercent) > 0)
+            .Select(DiskTopologyKey)
+            .ToHashSet(StringComparer.Ordinal);
+        var writablePools = onlineDisks
+            .GroupBy(disk => disk.PoolId, StringComparer.Ordinal)
+            .Count(group => group.Any(disk => writableDiskIds.Contains(DiskTopologyKey(disk))));
+        var poolsWithOnlineDisks = onlineDisks
+            .Select(disk => disk.PoolId)
+            .Distinct(StringComparer.Ordinal)
+            .Count();
+
+        return new CapacityAdmissionDiagnostics(
+            minimumBytes > 0 || minimumPercent > 0,
+            minimumBytes,
+            minimumPercent,
+            writableDiskIds.Count,
+            Math.Max(0, onlineDisks.Length - writableDiskIds.Count),
+            writablePools,
+            Math.Max(0, poolsWithOnlineDisks - writablePools),
+            onlineDisks.Length == 0
+                ? 0
+                : onlineDisks.Max(disk => WritableBytesAfterReserve(disk, minimumBytes, minimumPercent)));
+    }
+
+    private static long WritableBytesAfterReserve(StorageDiskInfo disk, long minimumBytes, double minimumPercent)
+    {
+        var reservedBytes = Math.Max(
+            Math.Max(0, minimumBytes),
+            (long)Math.Ceiling(Math.Max(0, disk.TotalBytes) * Math.Clamp(minimumPercent, 0, 95) / 100d));
+        return Math.Max(0, disk.AvailableBytes - reservedBytes);
+    }
+
+    private static string DiskTopologyKey(StorageDiskInfo disk)
+    {
+        return disk.NodeId + ":" + disk.DiskId;
+    }
+
+    private PlacementPolicyDiagnostics BuildPlacementPolicyDiagnostics(ClusterTopology topology)
+    {
+        var minimumFaultDomains = Math.Max(0, _options.PlacementMinFaultDomains);
+        var minimumBytes = DiskMinAvailableBytesAfterWrite;
+        var minimumPercent = Math.Clamp(_options.DiskMinAvailablePercentAfterWrite, 0, 95);
+        var onlineNodesById = topology.Nodes
+            .Where(node => string.Equals(node.Status, ClusterNodeStatuses.Online, StringComparison.Ordinal))
+            .ToDictionary(node => node.NodeId, StringComparer.Ordinal);
+        var onlineDisks = onlineNodesById.Values
+            .SelectMany(node => node.Disks.Select(disk => (Node: node, Disk: disk)))
+            .Where(item => string.Equals(item.Disk.Status, StorageDiskStatuses.Online, StringComparison.Ordinal))
+            .ToArray();
+        var writable = onlineDisks
+            .Where(item => WritableBytesAfterReserve(item.Disk, minimumBytes, minimumPercent) > 0)
+            .ToArray();
+        var onlineFaultDomainCount = onlineDisks
+            .Select(item => NormalizeFaultDomain(item.Node.FaultDomain, item.Node.NodeId))
+            .Distinct(StringComparer.Ordinal)
+            .Count();
+        var writableFaultDomainCount = writable
+            .Select(item => NormalizeFaultDomain(item.Node.FaultDomain, item.Node.NodeId))
+            .Distinct(StringComparer.Ordinal)
+            .Count();
+        var required = minimumFaultDomains <= 0 ? 0 : minimumFaultDomains;
+        var pools = writable
+            .GroupBy(item => item.Disk.PoolId, StringComparer.Ordinal)
+            .Select(group => group
+                .Select(item => NormalizeFaultDomain(item.Node.FaultDomain, item.Node.NodeId))
+                .Distinct(StringComparer.Ordinal)
+                .Count())
+            .ToArray();
+
+        return new PlacementPolicyDiagnostics(
+            minimumFaultDomains,
+            onlineFaultDomainCount,
+            writableFaultDomainCount,
+            required == 0 ? pools.Length : pools.Count(count => count >= required),
+            required == 0 ? 0 : pools.Count(count => count < required));
     }
 
     public async Task<BucketSettings> GetBucketSettingsAsync(string bucketName, CancellationToken cancellationToken)

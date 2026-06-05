@@ -51,9 +51,9 @@ http://localhost:5182  means-node2
 http://localhost:5183  means-node3
 ```
 
-注意：多节点 compose 主要验证节点/磁盘拓扑、Console 页面、diagnostics 和 background task observability。当前每个节点仍是独立 XlFs 命名空间，不要在分布式 metadata/RPC 完成前把 S3 数据面流量负载均衡到这些节点。
+注意：多节点 compose 主要验证节点/磁盘拓扑、Console 页面、diagnostics、background task observability 和内部 shard RPC。跨节点 shard/manifest 写入、读取、修复和均衡已有基础能力，但仍应把它视为实验多节点拓扑，不要按 MinIO 生产集群标准直接承载无状态入口负载。
 
-内部节点间 shard RPC 已预留 `/api/internal/cluster/shards/{diskId}/{relativePath}`，使用 `Means:Cluster:InternalAuthToken` 保护，并按 `Means:Cluster:MaxShardTransferBytes` 做流式传输上限。当前它是后续跨节点 EC placement/repair/rebalance 的数据通道底座，不代表 S3 数据面已经可以多节点负载均衡。
+内部节点间 shard RPC 使用 `/api/internal/cluster/{shards|manifests}/{diskId}/{relativePath}`，由 `Means:Cluster:InternalAuthToken` 保护。传输策略由 `Means:Cluster:MaxShardTransferBytes`、`Means:Cluster:ShardRpcMaxConnectionsPerNode`、`Means:Cluster:ShardRpcRequestTimeoutSeconds` 和 `Means:Cluster:ShardRpcPooledConnectionLifetimeSeconds` 控制，并会在 Console diagnostics 和 `/metrics` 中暴露。
 
 ## Console 与数据面安全
 
@@ -93,10 +93,30 @@ scrape_configs:
 | `means_object_replica_desired` | 配置期望副本数 |
 | `means_object_replica_records{state}` | 副本元数据记录状态 |
 | `means_object_replica_files{state}` | 副本文件存在性 |
-| `means_object_replica_objects{state}` | 对象副本健康状态 |
+| `means_object_replica_objects{state}` | 对象副本健康状态，包含 `under_replicated`、`degraded`、`recoverable_degraded`、`unrecoverable`、`read_quorum_lost`、`write_quorum_lost`、`without_manifest` |
 | `means_replica_repair_queue{status}` | repair 队列状态 |
 | `means_replica_repair_queue_failed{state}` | 达到最大重试等失败状态 |
+| `means_metadata_sync_mode{mode}` | 当前 MeansLogDb WAL sync 模式 |
+| `means_metadata_durable_writes` | metadata commit 是否在可见前执行 fsync |
+| `means_metadata_shared_namespace` | metadata 是否为共享分布式命名空间 |
+| `means_metadata_multi_node_write_risk` | 多在线节点但 metadata 仍为本地命名空间时置为 1 |
+| `means_metadata_wal_bytes` | 当前 metadata WAL 文件大小 |
+| `means_metadata_key_count` | 当前 metadata key 数量 |
 | `means_erasure_coding_profiles{state}` | EC profile 启用/禁用数量 |
+| `means_cluster_shard_rpc_enabled` | 内部 shard RPC 是否启用 |
+| `means_cluster_shard_rpc_max_transfer_bytes` | 内部 shard RPC 单次传输上限 |
+| `means_cluster_shard_rpc_max_connections_per_node` | 每个远端节点的 outbound shard RPC 连接上限 |
+| `means_cluster_shard_rpc_request_timeout_seconds` | shard RPC 请求超时秒数 |
+| `means_cluster_shard_rpc_pooled_connection_lifetime_seconds` | shard RPC 连接池连接生命周期秒数 |
+| `means_capacity_admission_enabled` | 写入容量水位准入是否启用 |
+| `means_capacity_admission_min_disk_available_bytes_after_write` | shard/replica 写入后目标磁盘需保留的最小可用字节数 |
+| `means_capacity_admission_min_disk_available_percent_after_write` | shard/replica 写入后目标磁盘需保留的最小可用容量百分比 |
+| `means_capacity_admission_disks{state}` | writable/low_watermark 磁盘数 |
+| `means_capacity_admission_pools{state}` | writable/low_watermark 存储池数 |
+| `means_capacity_admission_largest_writable_object_bytes` | 保持水位前提下可放置的最大单 shard/replica 大小 |
+| `means_placement_min_fault_domains` | 对象放置要求覆盖的最小故障域数量 |
+| `means_placement_fault_domains{state}` | online/writable 故障域数量 |
+| `means_placement_pools{state}` | 满足或不满足故障域策略的存储池数量 |
 | `means_background_task_success_count{task}` | 后台任务成功次数 |
 | `means_background_task_failure_count{task}` | 后台任务失败次数 |
 | `means_background_task_last_duration_milliseconds{task}` | 最近一次任务耗时 |
@@ -137,6 +157,24 @@ groups:
           summary: Means object replica files are missing
           description: Replica manifests reference unreadable files. Inspect repair queue immediately.
 
+      - alert: MeansObjectReadQuorumLost
+        expr: means_object_replica_objects{state="read_quorum_lost"} > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Means objects lost read quorum
+          description: At least one object is no longer readable from its available shards. Stop writes, inspect disks/nodes, and run repair after restoring capacity.
+
+      - alert: MeansObjectDegraded
+        expr: means_object_replica_objects{state="recoverable_degraded"} > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Means objects are degraded but recoverable
+          description: Objects are missing at least one shard or manifest copy while enough shards remain for recovery. Check repair queue progress.
+
       - alert: MeansObjectUnderReplicated
         expr: means_object_replica_objects{state="under_replicated"} > 0
         for: 5m
@@ -173,6 +211,15 @@ groups:
           summary: Means background task is failing
           description: Check Console diagnostics and service logs.
 
+      - alert: MeansMetadataMultiNodeWriteRisk
+        expr: means_metadata_multi_node_write_risk > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Means has multiple online nodes with local-only metadata
+          description: Do not load-balance S3 writes across nodes until a shared/distributed metadata namespace is configured.
+
       - alert: MeansCapacityLow
         expr: means_cluster_capacity_bytes{state="available"} / means_cluster_capacity_bytes{state="total"} < 0.15
         for: 10m
@@ -181,6 +228,24 @@ groups:
         annotations:
           summary: Means storage capacity is below 15 percent
           description: Add capacity or move data before writes are impacted.
+
+      - alert: MeansCapacityAdmissionLowWatermark
+        expr: means_capacity_admission_disks{state="low_watermark"} > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Means capacity admission is blocking at least one disk
+          description: One or more online disks cannot accept new shard writes while preserving the configured free-space watermark.
+
+      - alert: MeansPlacementFaultDomainPolicyAtRisk
+        expr: means_placement_min_fault_domains > 0 and on() (sum(means_placement_pools{state="below_fault_domain_policy"}) > 0)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Means placement fault-domain policy is not satisfiable in at least one pool
+          description: Add nodes/fault domains or lower the configured minimum before writes start failing for that pool.
 
       - alert: MeansCapacityCritical
         expr: means_cluster_capacity_bytes{state="available"} / means_cluster_capacity_bytes{state="total"} < 0.05

@@ -42,6 +42,14 @@ public sealed class XlFsOptions
 
     public int ReplicaRepairThrottleDelayMilliseconds { get; set; }
 
+    public int ShardTransferMaxConcurrency { get; set; } = 8;
+
+    public long DiskMinAvailableBytesAfterWrite { get; set; } = 1L * 1024 * 1024 * 1024;
+
+    public double DiskMinAvailablePercentAfterWrite { get; set; }
+
+    public int PlacementMinFaultDomains { get; set; }
+
     public int RebalanceIntervalSeconds { get; set; } = 600;
 
     public int RebalanceBatchSize { get; set; } = 100;

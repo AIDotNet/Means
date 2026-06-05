@@ -15,9 +15,19 @@ Virtual-hosted:    http(s)://{bucket}.means.local/{key}
 
 Local development usually starts with the same-origin alias. Production deployments should prefer virtual-hosted-style addressing.
 
+For local, path-prefixed, or load-balanced deployments, keep path-style enabled unless bucket DNS and TLS are ready for virtual-hosted-style requests. If the S3 data plane is mounted below `/s3/`, include that prefix in every SDK endpoint and presigner endpoint.
+
 ## Credentials
 
 Node and server-side SDKs can use SigV4 header signing or query presigning. Browser SDKs must not hold secret keys; use anonymous policy access or presigned URLs.
+
+## Multi-node Endpoint Checklist
+
+- Send SDK traffic to the stable public S3 data-plane VIP or load balancer, not internal cluster shard RPC endpoints.
+- Preserve `Host`, path, method, query string, and URL encoding through reverse proxies because SigV4 signs those values.
+- Generate presigned URLs with the same externally reachable origin and path prefix that browsers or clients will use.
+- Use one signing region consistently across clients and presigners, commonly `us-east-1`.
+- Run `SDKs/examples/typescript` `npm run check:s3` or the C# AWS SDK example `-- check` mode before write-heavy tests.
 
 ## Client Compatibility Targets
 

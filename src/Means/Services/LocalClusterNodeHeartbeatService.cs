@@ -101,7 +101,8 @@ public sealed class LocalClusterNodeHeartbeatService : BackgroundService
             Normalize(options.PoolId, "pool-1"),
             Normalize(options.PoolName, "Pool 1"),
             disks,
-            now);
+            now,
+            Normalize(options.FaultDomain, Normalize(options.NodeId, Environment.MachineName)));
     }
 
     private IReadOnlyList<StorageDiskRegistration> ReadObjectDisks(ClusterOptions options)

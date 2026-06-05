@@ -66,6 +66,13 @@ public sealed partial class XlFsStore
                 cancellationToken);
 
             await UploadRemotePreparedShardsAsync(prepared, cancellationToken);
+            var committedShards = prepared.Where(IsPreparedShardCommitted).ToArray();
+            if (committedShards.Length < ErasureWriteQuorum(dataShards, parityShards)
+                || !CanRecoverErasureData(dataShards, committedShards.Select(shard => shard.Manifest.SetIndex)))
+            {
+                await DeletePreparedShardsQuietlyAsync(prepared, cancellationToken);
+                throw new MeansException(MeansErrorCodes.SlowDown, "Insufficient EC shard write quorum.", 503);
+            }
         }
         catch
         {
@@ -90,7 +97,8 @@ public sealed partial class XlFsStore
                 ErasureCellSizeBytes,
                 ErasureWriteQuorum(dataShards, parityShards),
                 dataShards),
-            created);
+            created,
+            prepared.Count(shard => !IsPreparedShardCommitted(shard)));
     }
 
     private async Task WriteErasureDataShardsAsync(
@@ -321,7 +329,7 @@ public sealed partial class XlFsStore
                 DateTimeOffset.UtcNow.Subtract(TimeSpan.FromSeconds(60)),
                 cancellationToken);
             var plan = _placementPlanner.PlanPlacement(
-                new ObjectPlacementRequest(
+                CreatePlacementRequest(
                     bucketName,
                     objectId,
                     objectId,
@@ -397,25 +405,38 @@ public sealed partial class XlFsStore
         var remoteShards = prepared
             .Where(shard => shard.Target.RemoteNode is not null)
             .ToArray();
-        await Parallel.ForEachAsync(remoteShards, cancellationToken, async (shard, token) =>
-        {
-            await using var content = new FileStream(
-                shard.LocalPath,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.Read,
-                XlStreamBufferSize,
-                FileOptions.Asynchronous | FileOptions.SequentialScan);
-            await _shardTransport.WriteShardAsync(
-                shard.Target.RemoteNode!,
-                shard.Target.DiskId,
-                shard.Manifest.RelativePath,
-                content,
-                shard.Manifest.Size,
-                shard.Manifest.ChecksumSha256,
-                token);
-            shard.RemoteUploaded = true;
-        });
+        await Parallel.ForEachAsync(
+            remoteShards,
+            new ParallelOptions
+            {
+                CancellationToken = cancellationToken,
+                MaxDegreeOfParallelism = ShardTransferMaxConcurrency
+            },
+            async (shard, token) =>
+            {
+                try
+                {
+                    await using var content = new FileStream(
+                        shard.LocalPath,
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.Read,
+                        XlStreamBufferSize,
+                        FileOptions.Asynchronous | FileOptions.SequentialScan);
+                    await _shardTransport.WriteShardAsync(
+                        shard.Target.RemoteNode!,
+                        shard.Target.DiskId,
+                        shard.Manifest.RelativePath,
+                        content,
+                        shard.Manifest.Size,
+                        shard.Manifest.ChecksumSha256,
+                        token);
+                    shard.RemoteUploaded = true;
+                }
+                catch when (!token.IsCancellationRequested)
+                {
+                }
+            });
     }
 
     private async Task DeletePreparedShardsQuietlyAsync(
@@ -457,37 +478,82 @@ public sealed partial class XlFsStore
     }
 
     private async Task<IReadOnlyList<XlShardManifest>> WriteFullCopyShardsAsync(
+        string bucketName,
+        string objectKey,
+        string? versionId,
         string sourcePath,
-        Func<XlDisk, string> relativePathFactory,
+        Func<int, string> relativePathFactory,
         long length,
         string checksum,
         string quorumErrorMessage,
         CancellationToken cancellationToken)
     {
-        var onlineDisks = _disks.Where(disk => disk.Online).ToArray();
-        if (onlineDisks.Length < WriteQuorum)
+        var targets = await TryPlanFullCopyTargetsAsync(
+                bucketName,
+                objectKey,
+                versionId,
+                length,
+                cancellationToken)
+            ?? PlanLocalFullCopyTargets();
+        if (targets.Count < WriteQuorum)
         {
             throw new MeansException(MeansErrorCodes.SlowDown, quorumErrorMessage, 503);
         }
 
         var shards = new ConcurrentBag<XlShardManifest>();
-        await Parallel.ForEachAsync(onlineDisks, cancellationToken, async (disk, token) =>
-        {
-            var relative = relativePathFactory(disk);
-            var target = Path.Combine(disk.RootPath, relative);
-            try
+        await Parallel.ForEachAsync(
+            targets,
+            new ParallelOptions
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                await using var source = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read, XlStreamBufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
-                await using var output = new FileStream(target, FileMode.CreateNew, FileAccess.Write, FileShare.None, XlStreamBufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
-                await source.CopyToAsync(output, XlStreamBufferSize, token);
-                shards.Add(new XlShardManifest(disk.DiskId, disk.SetIndex, relative, length, checksum));
-            }
-            catch
+                CancellationToken = cancellationToken,
+                MaxDegreeOfParallelism = ShardTransferMaxConcurrency
+            },
+            async (target, token) =>
             {
-                DeleteFileQuietly(target);
-            }
-        });
+                var relative = relativePathFactory(target.SetIndex);
+                var shard = new XlShardManifest(target.DiskId, target.SetIndex, relative, length, checksum);
+                try
+                {
+                    if (target.LocalDisk is { } disk)
+                    {
+                        var path = Path.Combine(disk.RootPath, relative);
+                        try
+                        {
+                            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                            await using var source = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read, XlStreamBufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
+                            await using var output = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, XlStreamBufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
+                            await source.CopyToAsync(output, XlStreamBufferSize, token);
+                        }
+                        catch
+                        {
+                            DeleteFileQuietly(path);
+                            throw;
+                        }
+                    }
+                    else
+                    {
+                        if (target.RemoteNode is null)
+                        {
+                            throw new MeansException(MeansErrorCodes.InvalidRequest, "Remote full-copy target is not online.", 503);
+                        }
+
+                        await using var source = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read, XlStreamBufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
+                        await _shardTransport.WriteShardAsync(
+                            target.RemoteNode,
+                            target.DiskId,
+                            relative,
+                            source,
+                            length,
+                            checksum,
+                            token);
+                    }
+
+                    shards.Add(shard);
+                }
+                catch when (!token.IsCancellationRequested)
+                {
+                }
+            });
 
         var committed = shards.OrderBy(shard => shard.SetIndex).ToArray();
         if (committed.Length >= WriteQuorum)
@@ -495,16 +561,112 @@ public sealed partial class XlFsStore
             return committed;
         }
 
-        foreach (var shard in committed)
+        await DeleteShardCopiesQuietlyAsync(committed, CancellationToken.None);
+        throw new MeansException(MeansErrorCodes.SlowDown, quorumErrorMessage, 503);
+    }
+
+    private async Task<IReadOnlyList<FullCopyWriteTarget>?> TryPlanFullCopyTargetsAsync(
+        string bucketName,
+        string objectKey,
+        string? versionId,
+        long contentLength,
+        CancellationToken cancellationToken)
+    {
+        if (!_shardTransport.Enabled)
         {
-            var disk = _disks.FirstOrDefault(item => item.DiskId == shard.DiskId);
-            if (disk is not null)
-            {
-                DeleteFileQuietly(Path.Combine(disk.RootPath, shard.RelativePath));
-            }
+            return null;
         }
 
-        throw new MeansException(MeansErrorCodes.SlowDown, quorumErrorMessage, 503);
+        try
+        {
+            var topology = await GetClusterTopologyAsync(
+                DateTimeOffset.UtcNow.Subtract(TimeSpan.FromSeconds(60)),
+                cancellationToken);
+            var localDiskIds = _disks.Select(disk => disk.DiskId).ToHashSet(StringComparer.Ordinal);
+            var onlineRemoteDiskCount = topology.Nodes
+                .Where(node => string.Equals(node.Status, ClusterNodeStatuses.Online, StringComparison.Ordinal))
+                .SelectMany(node => node.Disks)
+                .Count(disk =>
+                    !localDiskIds.Contains(disk.DiskId)
+                    && string.Equals(disk.Status, StorageDiskStatuses.Online, StringComparison.Ordinal));
+            if (onlineRemoteDiskCount == 0)
+            {
+                return null;
+            }
+
+            var onlineDiskCount = topology.Nodes
+                .Where(node => string.Equals(node.Status, ClusterNodeStatuses.Online, StringComparison.Ordinal))
+                .SelectMany(node => node.Disks)
+                .Count(disk => string.Equals(disk.Status, StorageDiskStatuses.Online, StringComparison.Ordinal));
+            var desiredReplicas = Math.Min(
+                Math.Min(onlineDiskCount, 16),
+                Math.Max(WriteQuorum, _disks.Count(disk => disk.Online)));
+            if (desiredReplicas < WriteQuorum)
+            {
+                return null;
+            }
+
+            var plan = _placementPlanner.PlanPlacement(
+                CreatePlacementRequest(
+                    bucketName,
+                    objectKey,
+                    versionId,
+                    desiredReplicas,
+                    contentLength),
+                topology);
+            var nodesById = topology.Nodes.ToDictionary(node => node.NodeId, StringComparer.Ordinal);
+            var selectedDisks = new HashSet<string>(StringComparer.Ordinal);
+            var targets = new List<FullCopyWriteTarget>(desiredReplicas);
+            foreach (var replica in plan.Replicas.OrderBy(replica => replica.ReplicaIndex))
+            {
+                if (!selectedDisks.Add(replica.DiskId))
+                {
+                    return null;
+                }
+
+                var localDisk = _disks.FirstOrDefault(disk => string.Equals(disk.DiskId, replica.DiskId, StringComparison.Ordinal));
+                if (localDisk is not null)
+                {
+                    if (!localDisk.Online)
+                    {
+                        return null;
+                    }
+
+                    targets.Add(new FullCopyWriteTarget(replica.DiskId, replica.ReplicaIndex, localDisk, null));
+                    continue;
+                }
+
+                if (!nodesById.TryGetValue(replica.NodeId, out var node)
+                    || !string.Equals(node.Status, ClusterNodeStatuses.Online, StringComparison.Ordinal))
+                {
+                    return null;
+                }
+
+                var remoteDisk = node.Disks.FirstOrDefault(disk =>
+                    string.Equals(disk.DiskId, replica.DiskId, StringComparison.Ordinal)
+                    && string.Equals(disk.Status, StorageDiskStatuses.Online, StringComparison.Ordinal));
+                if (remoteDisk is null)
+                {
+                    return null;
+                }
+
+                targets.Add(new FullCopyWriteTarget(replica.DiskId, replica.ReplicaIndex, null, node));
+            }
+
+            return targets.Count == desiredReplicas ? targets : null;
+        }
+        catch (MeansException)
+        {
+            return null;
+        }
+    }
+
+    private IReadOnlyList<FullCopyWriteTarget> PlanLocalFullCopyTargets()
+    {
+        return _disks
+            .Where(disk => disk.Online)
+            .Select(disk => new FullCopyWriteTarget(disk.DiskId, disk.SetIndex, disk, null))
+            .ToArray();
     }
 
     private async Task<Stream> OpenErasureCodedObjectAsync(
@@ -512,16 +674,19 @@ public sealed partial class XlFsStore
         XlObjectManifest manifest,
         CancellationToken cancellationToken)
     {
-        if (manifest.Parts.Count != 1)
-        {
-            throw new MeansException(MeansErrorCodes.NoSuchKey, "Multipart EC reconstruction is not supported yet.", 404);
-        }
-
         Directory.CreateDirectory(Path.GetDirectoryName(TempPath("probe.tmp"))!);
         var tempPath = TempPath(Guid.NewGuid().ToString("N") + ".ec.read.tmp");
         try
         {
-            await ReconstructErasureCodedPartAsync(info, manifest, manifest.Parts[0], tempPath, cancellationToken);
+            if (manifest.Parts.Count == 1)
+            {
+                await ReconstructErasureCodedPartAsync(info, manifest, manifest.Parts[0], tempPath, cancellationToken);
+            }
+            else
+            {
+                await ReconstructErasureCodedMultipartObjectAsync(info, manifest, tempPath, cancellationToken);
+            }
+
             return new FileStream(
                 tempPath,
                 FileMode.Open,
@@ -534,6 +699,42 @@ public sealed partial class XlFsStore
         {
             DeleteFileQuietly(tempPath);
             throw;
+        }
+    }
+
+    private async Task ReconstructErasureCodedMultipartObjectAsync(
+        ObjectInfo info,
+        XlObjectManifest manifest,
+        string destinationPath,
+        CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
+        await using var output = new FileStream(
+            destinationPath,
+            FileMode.CreateNew,
+            FileAccess.Write,
+            FileShare.None,
+            XlStreamBufferSize,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        foreach (var part in manifest.Parts.OrderBy(part => part.PartNumber))
+        {
+            var partTempPath = TempPath(Guid.NewGuid().ToString("N") + ".ec.part.read.tmp");
+            try
+            {
+                await ReconstructErasureCodedPartAsync(info, manifest, part, partTempPath, cancellationToken);
+                await using var partStream = new FileStream(
+                    partTempPath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.Read,
+                    XlStreamBufferSize,
+                    FileOptions.Asynchronous | FileOptions.SequentialScan);
+                await partStream.CopyToAsync(output, cancellationToken);
+            }
+            finally
+            {
+                DeleteFileQuietly(partTempPath);
+            }
         }
     }
 
@@ -789,34 +990,56 @@ public sealed partial class XlFsStore
                 checksum));
         }
 
-        await Parallel.ForEachAsync(manifestTargets, cancellationToken, async (shard, token) =>
+        var writtenCopies = new ConcurrentBag<XlShardManifest>();
+        await Parallel.ForEachAsync(
+            manifestTargets,
+            new ParallelOptions
+            {
+                CancellationToken = cancellationToken,
+                MaxDegreeOfParallelism = ShardTransferMaxConcurrency
+            },
+            async (shard, token) =>
+            {
+                try
+                {
+                    var disk = _disks.FirstOrDefault(item => item.DiskId == shard.DiskId);
+                    if (disk is not null)
+                    {
+                        var manifestPath = Path.Combine(disk.RootPath, ObjectManifestRelativePath(bucketName, objectId));
+                        Directory.CreateDirectory(Path.GetDirectoryName(manifestPath)!);
+                        await File.WriteAllBytesAsync(manifestPath, jsonBytes, token);
+                        writtenCopies.Add(shard);
+                        return;
+                    }
+
+                    if (!_shardTransport.Enabled)
+                    {
+                        throw new MeansException(MeansErrorCodes.InvalidRequest, "Cluster shard transport is not configured for remote manifest replication.", 503);
+                    }
+
+                    var node = await TryFindRemoteNodeForDiskAsync(shard.DiskId, token)
+                        ?? throw new MeansException(MeansErrorCodes.SlowDown, "Remote manifest target is not online.", 503);
+                    using var content = new MemoryStream(jsonBytes);
+                    await _shardTransport.WriteManifestAsync(
+                        node,
+                        shard.DiskId,
+                        ObjectManifestRelativePath(bucketName, objectId),
+                        content,
+                        jsonBytes.Length,
+                        checksum,
+                        token);
+                    writtenCopies.Add(shard);
+                }
+                catch when (!token.IsCancellationRequested)
+                {
+                }
+            });
+
+        var manifestWriteQuorum = Math.Min(manifestTargets.Count, Math.Max(1, manifest.Erasure.WriteQuorum));
+        if (writtenCopies.Count < manifestWriteQuorum)
         {
-            var disk = _disks.FirstOrDefault(item => item.DiskId == shard.DiskId);
-            if (disk is not null)
-            {
-                var manifestPath = Path.Combine(disk.RootPath, ObjectManifestRelativePath(bucketName, objectId));
-                Directory.CreateDirectory(Path.GetDirectoryName(manifestPath)!);
-                await File.WriteAllBytesAsync(manifestPath, jsonBytes, token);
-                return;
-            }
-
-            if (!_shardTransport.Enabled)
-            {
-                throw new MeansException(MeansErrorCodes.InvalidRequest, "Cluster shard transport is not configured for remote manifest replication.", 503);
-            }
-
-            var node = await TryFindRemoteNodeForDiskAsync(shard.DiskId, token)
-                ?? throw new MeansException(MeansErrorCodes.SlowDown, "Remote manifest target is not online.", 503);
-            using var content = new MemoryStream(jsonBytes);
-            await _shardTransport.WriteManifestAsync(
-                node,
-                shard.DiskId,
-                ObjectManifestRelativePath(bucketName, objectId),
-                content,
-                jsonBytes.Length,
-                checksum,
-                token);
-        });
+            throw new MeansException(MeansErrorCodes.SlowDown, "Object manifest write quorum was not met.", 503);
+        }
     }
 
     private static bool IsReedSolomonErasure(XlObjectManifest manifest)
@@ -831,6 +1054,35 @@ public sealed partial class XlFsStore
     private static int ErasureWriteQuorum(int dataShards, int parityShards)
     {
         return parityShards == dataShards ? dataShards + 1 : dataShards;
+    }
+
+    private static bool CanRecoverErasureData(int dataShards, IEnumerable<int> shardIndexes)
+    {
+        var available = shardIndexes
+            .Distinct()
+            .OrderBy(index => index)
+            .Take(dataShards)
+            .Select(index => new ResolvedErasureShard(index, string.Empty, false))
+            .ToArray();
+        if (available.Length < dataShards)
+        {
+            return false;
+        }
+
+        try
+        {
+            _ = BuildDecodeMatrix(dataShards, available);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool IsPreparedShardCommitted(PreparedShard shard)
+    {
+        return shard.Target.LocalDisk is not null || shard.RemoteUploaded;
     }
 
     private static long CalculateErasureShardLength(long contentLength, int dataShards)
@@ -862,6 +1114,38 @@ public sealed partial class XlFsStore
             if (disk is not null)
             {
                 DeleteFileQuietly(Path.Combine(disk.RootPath, shard.RelativePath));
+            }
+        }
+    }
+
+    private async Task DeleteShardCopiesQuietlyAsync(
+        IReadOnlyList<XlShardManifest> shards,
+        CancellationToken cancellationToken)
+    {
+        foreach (var shard in shards)
+        {
+            try
+            {
+                var disk = _disks.FirstOrDefault(item => item.DiskId == shard.DiskId);
+                if (disk is not null)
+                {
+                    DeleteFileQuietly(Path.Combine(disk.RootPath, shard.RelativePath));
+                    continue;
+                }
+
+                if (!_shardTransport.Enabled)
+                {
+                    continue;
+                }
+
+                var node = await TryFindRemoteNodeForDiskAsync(shard.DiskId, cancellationToken);
+                if (node is not null)
+                {
+                    await _shardTransport.DeleteShardAsync(node, shard.DiskId, shard.RelativePath, cancellationToken);
+                }
+            }
+            catch
+            {
             }
         }
     }
@@ -1222,6 +1506,8 @@ public sealed partial class XlFsStore
 
     private sealed record ShardWriteTarget(string DiskId, XlDisk? LocalDisk, ClusterNodeInfo? RemoteNode);
 
+    private sealed record FullCopyWriteTarget(string DiskId, int SetIndex, XlDisk? LocalDisk, ClusterNodeInfo? RemoteNode);
+
     private sealed class PreparedShard(
         ShardWriteTarget target,
         XlShardManifest manifest,
@@ -1239,7 +1525,7 @@ public sealed partial class XlFsStore
         public bool RemoteUploaded { get; set; }
     }
 
-    private sealed record XlErasureWriteResult(XlErasureInfo Erasure, IReadOnlyList<XlShardManifest> Shards);
+    private sealed record XlErasureWriteResult(XlErasureInfo Erasure, IReadOnlyList<XlShardManifest> Shards, int FailedShardCount);
 
     private sealed record ResolvedErasureShard(int ShardIndex, string Path, bool DeleteOnDispose);
 
