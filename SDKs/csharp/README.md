@@ -10,7 +10,7 @@ dotnet build SDKs/csharp/Means.Client.csproj -c Release
 dotnet pack SDKs/csharp/Means.Client.csproj -c Release
 ```
 
-`Release` 构建或打包会在 `SDKs/csharp/bin/Release` 生成 `Means.Client.0.1.1.nupkg` 和 `Means.Client.0.1.1.snupkg`。
+`Release` 构建或打包会在 `SDKs/csharp/bin/Release` 生成 `Means.Client.0.1.2.nupkg` 和 `Means.Client.0.1.2.snupkg`。
 Reference the generated `Means.Client` package or project from your application.
 
 ## Basic usage

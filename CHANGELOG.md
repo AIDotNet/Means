@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.2 - 2026-06-05
+
+- Bumped the C# and TypeScript SDK package versions to `0.1.2`.
+- Added cluster diagnostics, metrics, and console UI updates.
+
 ## 0.1.1 - 2026-06-05
 
 - Bumped the C# and TypeScript SDK package versions to `0.1.1`.

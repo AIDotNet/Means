@@ -1,6 +1,6 @@
 {
   "name": "@means/sdk-node",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Node.js TypeScript SDK extension for Means object storage with SigV4 signing.",
   "license": "MIT",
   "type": "commonjs",
@@ -24,7 +24,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@means/sdk": "0.1.1"
+    "@means/sdk": "0.1.2"
   },
   "scripts": {
     "build": "node ../../scripts/build-package.mjs .",
