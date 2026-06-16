@@ -1,205 +1,323 @@
 # Means
 
-Means 是一个基于 .NET 的企业级应用框架，一个可自部署的 S3-compatible 对象存储服务，当前默认运行时使用 MinIO-inspired `XlFs` 自研存储后端（单节点多盘、对象 manifest、quorum、LogDb 元数据索引），完全采用自研 MeansLogDb 元数据引擎。
+> **S3-Compatible Object Storage — Enterprise-Grade, Self-Deployable, .NET-Powered.**
 
-> 截至 2026-05-09：本文档描述的是仓库当前代码状态，而不是仅设计目标。
+Means is a self-deployable S3-compatible object storage service built on ASP.NET Core. It uses the custom `XlFs` storage backend (inspired by MinIO's architecture — single-node multi-disk, object manifest, quorum-based writes, LogDb metadata indexing), powered entirely by the self-developed **MeansLogDb** metadata engine.
 
-## 当前实现概览
+> **As of 2026-05-09:** This document reflects the **current code state** of the repository, not aspirational design goals.
 
-- 后端：`ASP.NET Core net10.0`（`src/Means`）
-- 协议层：S3 兼容地址解析、SigV4 校验、S3 XML 响应（`src/Means.Protocol.S3`）
-- 存储层：默认 `XlFs`（`src/Means.Infrastructure.XlFs`）
-- 管理面：Cookie 鉴权的 Console API + React 控制台（`/api/console` + `src/Means/wwwroot`）
-- SDK：C# SDK、TypeScript SDK（browser-safe）与 Node 扩展
+---
 
-## 已实现能力
+## Table of Contents
 
-### S3 数据面（v1 基线）
+- [Architecture Overview](#architecture-overview)
+- [Implemented Capabilities](#implemented-capabilities)
+  - [S3 Data Plane](#s3-data-plane-v1-baseline)
+  - [Console Management Plane](#console-management-plane)
+- [Not Yet Implemented](#not-yet-implemented)
+- [Quick Start](#quick-start)
+  - [Prerequisites](#1-prerequisites)
+  - [Run with .NET CLI](#2-start-the-service)
+  - [Run with Docker Compose](#21-docker-compose)
+  - [Access the Console](#3-access-the-console)
+  - [S3 Access Methods](#4-local-s3-access-methods)
+- [Configuration Reference](#configuration-reference)
+- [Development & Testing](#development--testing)
+  - [Running Tests](#running-tests)
+  - [Frontend Development](#frontend-development)
+- [SDKs & Specification](#sdks--specification)
+- [Project Map](#project-map)
+- [License](#license)
 
-支持的操作：
+---
 
-- `ListBuckets`
-- `CreateBucket`
-- `HeadBucket`
-- `DeleteBucket`
-- `ListObjectsV2`（`prefix` / `delimiter` / `continuation-token` / `max-keys`）
-- `PutObject`
-- `GetObject`
-- `HeadObject`
-- `DeleteObject`
-- `CopyObject`（`x-amz-copy-source`，支持 `COPY` / `REPLACE` metadata directive）
-- Multipart Upload（initiate / upload part / upload part copy / complete / abort / list parts / list uploads）
-- Versioning（`?versioning`、`?versions`、按 `versionId` GET/HEAD/DELETE、delete marker）
-- Object tagging（`?tagging`，支持 current version 和指定 `versionId`）
-- Lifecycle（`?lifecycle`，支持 expiration、noncurrent cleanup、AbortIncompleteMultipartUpload）
-- Bucket CORS（`?cors` 配置 CRUD 和 OPTIONS preflight）
-- Bucket notification（`?notification` 配置持久化预留接口）
-- SigV4 预签名 URL（`GET` / `PUT` / multipart `UploadPart`）
-- `?policy` 子资源（`GET` / `PUT` / `DELETE`）
+## Architecture Overview
 
-实现细节：
+| Layer | Project | Purpose |
+|---|---|---|
+| **Host / API** | `src/Means` | ASP.NET Core `net10.0` application entry point, middleware pipeline, endpoints, DI composition |
+| **Protocol** | `src/Means.Protocol.S3` | S3-compatible address resolution, SigV4 signature validation, S3 XML response serialization |
+| **Storage Engine** | `src/Means.Infrastructure.XlFs` | Default XlFs storage backend (multi-disk, manifest, quorum, MeansLogDb metadata) |
+| **Core Abstractions** | `src/Means.Core` | Domain models, storage interfaces, policies, error definitions, placement strategies |
+| **Management** | `src/Means/Endpoints/Console` | Cookie-authenticated Console JSON API |
+| **Web UI** | `src/Means/wwwroot` | React-based management dashboard (built from `web/`) |
+| **SDK - C#** | `SDKs/csharp` | Full-featured C# client SDK |
+| **SDK - TypeScript** | `SDKs/typescript` | Browser-safe TS SDK + Node extension (SigV4) |
+| **Tests** | `tests/` | Unit, integration, and contract tests |
 
-- 同时支持 path-style 与 virtual-hosted-style 地址解析。
-- 统一返回 S3 风格 XML（列表、错误、复制结果）。
-- 支持 Range 读取（`206`），非法范围返回 `416 InvalidRange` 且带 `Content-Range`。
-- 响应支持内容协商压缩（`br` / `gzip`），Range 请求下禁用压缩。
-- `PutObject` 为原子写入语义：对象在元数据事务提交后对外可见。
-- Multipart Upload 使用 S3 严格规则：`partNumber` 为 `1..10000`，除最后一片外每片至少 `5 MiB`，完成后的 ETag 为 `md5(concat(part-md5-bytes))-part-count`。
-- `Means:RequestLimits:MaxUploadSizeBytes` 对 multipart 表示单个 part 的请求体限制，不限制完成后的总对象大小。
+### Solution Structure (`Means.slnx`)
 
-### Console 管理面
+```
+Means.slnx
+├── src/
+│   ├── Means/                  # Host application
+│   ├── Means.Core/             # Core abstractions & domain
+│   ├── Means.Infrastructure.XlFs/  # XlFs storage engine
+│   └── Means.Protocol.S3/      # S3 protocol implementation
+│
+├── tests/
+│   ├── Means.UnitTests/        # Unit tests
+│   ├── Means.IntegrationTests/ # Integration tests
+│   └── Means.ContractTests/    # SDK spec compliance tests
+│
+├── SDKs/
+│   ├── csharp/                 # C# SDK
+│   ├── typescript/             # TypeScript SDK
+│   └── spec/                   # Machine-readable protocol spec
+│
+├── web/                        # React frontend (Vite)
+└── docs/                       # Documentation site
+```
 
-内置 `/api/console`（JSON API）与 Web 控制台，覆盖：
+---
 
-- 登录/登出/会话检查（Cookie）
-- Bucket 管理（创建、删除、对象浏览）
-- Bucket Policy 管理
-- 预签名上传/下载链接生成
-- 大文件分片上传（默认 5 MiB 起启用 multipart，16 MiB part，3 并发）
-- AccessKey 管理（创建、删除、列表）
-- 系统设置（最大上传大小）
-- 审计日志与小时级请求统计看板
-- 集群状态页、节点/磁盘健康页与诊断导出（`/api/console/cluster`、`/api/console/diagnostics`）
-- Prometheus 文本指标导出（`/metrics`）与可选 OpenTelemetry tracing（OTLP）
-- 后台任务统一管理与手动触发（heartbeat、disk health、metadata consistency、storage GC、repair、rebalance、lifecycle、replication worker）
-- API 固定窗口限流（Console 登录、Console API、S3 数据面）
+## Implemented Capabilities
 
-## 尚未实现（当前代码无此能力）
+### S3 Data Plane (v1 Baseline)
 
-- Replication
-- Object Lock / Retention
-- IAM / STS 完整模型
-- 多节点分布式数据分片/纠删码
+| Category | Operations | Status |
+|---|---|---|
+| **Service** | `ListBuckets` | ✅ |
+| **Bucket** | `CreateBucket`, `HeadBucket`, `DeleteBucket` | ✅ |
+| **Object** | `PutObject`, `GetObject`, `HeadObject`, `DeleteObject` | ✅ |
+| **Listing** | `ListObjectsV2` (`prefix`, `delimiter`, `continuation-token`, `max-keys`) | ✅ |
+| **Copy** | `CopyObject` (`x-amz-copy-source`, `COPY`/`REPLACE` metadata directive) | ✅ |
+| **Multipart** | Initiate, UploadPart, UploadPartCopy, Complete, Abort, ListParts, ListMultipartUploads | ✅ |
+| **Versioning** | `?versioning`, `?versions`, GET/HEAD/DELETE by `versionId`, delete markers | ✅ |
+| **Tagging** | `?tagging` (current & specific version) | ✅ |
+| **Lifecycle** | `?lifecycle` (expiration, noncurrent cleanup, AbortIncompleteMultipartUpload) | ✅ |
+| **CORS** | `?cors` config CRUD, OPTIONS preflight | ✅ |
+| **Notification** | `?notification` config persistence (reserved interface) | ✅ |
+| **Policy** | `?policy` sub-resource (`GET`/`PUT`/`DELETE`) | ✅ |
+| **Pre-signed URL** | SigV4 pre-signed `GET`, `PUT`, multipart `UploadPart` | ✅ |
 
-## 快速开始
+#### Key Implementation Details
 
-### 1) 环境要求
+- **Address Resolution:** Supports both `path-style` and `virtual-hosted-style` S3 addressing.
+- **Response Format:** Unified S3-compatible XML (listings, errors, copy results).
+- **Range Reads:** `Range` header → `206 Partial Content`; invalid ranges → `416 InvalidRange` with `Content-Range` header.
+- **Compression:** Content-negotiated (`br` / `gzip`) on responses; disabled for Range requests.
+- **Atomic Writes:** `PutObject` is atomic — objects become visible only after the metadata transaction commits.
+- **Multipart Rules:**
+  - `partNumber`: `1`–`10000`
+  - Minimum part size (except last): `5 MiB`
+  - Final ETag: `md5(concat(part-md5-bytes))-part-count`
+  - `Means:RequestLimits:MaxUploadSizeBytes` applies per-part, not total assembled size.
+- **Concurrency Control:** S3 `PUT` and multipart `UploadPart` share a global concurrency limit (default: 64). Exceeding returns `503 SlowDown` with `Retry-After: 1`.
+- **Checksum Verification:** Disabled by default on reads to avoid double I/O for large objects. Enable via `VerifyChecksumOnRead`. Background scrub always checksums and enqueues repairs.
 
-- .NET SDK 10
-- Node.js 20+（仅在你需要修改前端时）
+### Console Management Plane
 
-### 2) 启动服务
+Built-in management API (`/api/console`, JSON) and web dashboard (React):
+
+| Feature | Endpoint / Details |
+|---|---|
+| **Authentication** | Cookie-based login/logout/session check |
+| **Bucket Management** | Create, delete, browse objects |
+| **Bucket Policy** | View and edit bucket policies |
+| **Pre-signed URLs** | Generate upload/download links |
+| **Large File Upload** | Multipart from 5 MiB, 16 MiB parts, 3 concurrent |
+| **AccessKey Management** | Create, delete, list access keys |
+| **System Settings** | Configure max upload size |
+| **Audit & Metrics** | Audit log, hourly request statistics dashboard |
+| **Cluster Status** | Node/disk health, diagnostics export (`/api/console/cluster`, `/api/console/diagnostics`) |
+| **Monitoring Export** | Prometheus `/metrics`, optional OpenTelemetry (OTLP) |
+| **Background Tasks** | Unified management with manual triggers — heartbeat, disk health, metadata consistency, storage GC, repair, rebalance, lifecycle, replication worker |
+| **Rate Limiting** | Fixed-window limits for Console login, Console API, and S3 data plane |
+
+---
+
+## Not Yet Implemented
+
+The following features are **not present** in the current codebase:
+
+- 🔲 **Replication** — Cross-bucket/bucket replication rules
+- 🔲 **Object Lock / Retention** — WORM compliance
+- 🔲 **IAM / STS** — Full identity and access management model
+- 🔲 **Distributed Sharding / EC** — Multi-node data sharding and erasure coding across nodes
+
+---
+
+## Quick Start
+
+### 1) Prerequisites
+
+| Dependency | Version | Notes |
+|---|---|---|
+| .NET SDK | `10.0` | Required for building and running |
+| Node.js | `20+` | Only needed for frontend development |
+
+### 2) Start the Service
 
 ```bash
+# Restore dependencies
 dotnet restore Means.slnx
+
+# Build the solution
 dotnet build Means.slnx
+
+# Run with the 'http' launch profile
 dotnet run --project src/Means/Means.csproj --launch-profile http
 ```
 
-默认开发地址：`http://localhost:5178`
+The development server starts at **`http://localhost:5178`**.
 
-### 2.1) Docker Compose 启动
+### 2.1) Docker Compose
 
-默认单机 XlFs 版本：
+**Single-node (default XlFs):**
 
 ```bash
 docker compose up -d --build
 ```
 
-访问地址：`http://localhost:5178`
+Access: `http://localhost:5178`
 
-默认 Compose 控制台账号：`meansadmin` / `meansadmin-local`。默认 S3 凭证：`meansadmin` / `meansadmin-local-secret`。生产部署应通过 `.env` 或环境变量覆盖这些值。
+Default credentials (override via `.env` or environment variables for production):
+- Console: `meansadmin` / `meansadmin-local`
+- S3: `meansadmin` / `meansadmin-local-secret`
 
-多节点实验拓扑：
+**Multi-node (experimental):**
 
 ```bash
 docker compose -f compose.multinode.yaml up -d --build
 ```
 
-访问地址：
+| Node | Address |
+|---|---|
+| `means-node1` | `http://localhost:5181` |
+| `means-node2` | `http://localhost:5182` |
+| `means-node3` | `http://localhost:5183` |
 
-- `http://localhost:5181`：`means-node1`
-- `http://localhost:5182`：`means-node2`
-- `http://localhost:5183`：`means-node3`
+> **⚠️ Important:** The multi-node setup is for topology and operations page validation only. Each node has an independent XlFs namespace. Do **not** place a data-plane load balancer in front of these nodes until distributed metadata/RPC is implemented.
 
-注意：当前多节点 compose 用于节点/磁盘拓扑和运维页面验证，每个节点仍拥有独立 XlFs 命名空间；在分布式 metadata/RPC 完成前，不要在这些节点前放数据面负载均衡器。
+### 3) Access the Console
 
-### 3) 访问控制台
+Open `http://localhost:5178` and sign in with the default development credentials:
 
-打开 `http://localhost:5178`，使用默认开发账号：
+| Field | Value |
+|---|---|
+| Username | `admin` |
+| Password | `meansadmin` |
 
-- 用户名：`admin`
-- 密码：`meansadmin`
+### 4) Local S3 Access Methods
 
-### 4) 本地 S3 访问方式
+**Same-origin alias (development):**
 
-开发环境可直接使用同源别名路径：
+```
+http://localhost:5178/s3/{bucket}/{key}
+```
 
-- `http://localhost:5178/s3/{bucket}/{key}`
+**Standard host styles (requires DNS/hosts configuration):**
 
-也支持标准主机风格（需本机 DNS/hosts 配置）：
+| Style | URL Pattern |
+|---|---|
+| Path-style | `http(s)://api.means.local/{bucket}/{key}` |
+| Virtual-hosted-style | `http(s)://{bucket}.means.local/{key}` |
 
-- Path-style：`http(s)://api.means.local/{bucket}/{key}`
-- Virtual-hosted-style：`http(s)://{bucket}.means.local/{key}`
+---
 
-## 配置说明（`src/Means/appsettings.json`）
+## Configuration Reference
 
-| 配置键 | 默认值 | 说明 |
-| --- | --- | --- |
-| `Means:S3:ServiceHost` | `api.means.local` | Path-style 主机名 |
-| `Means:S3:DomainSuffix` | `means.local` | Virtual-hosted-style 域后缀 |
-| `Means:S3:AliasPrefix` | `/s3` | 同源 S3 别名前缀 |
-| `Means:Storage:ObjectsPath` | `data/objects` | 未配置 `Disks` 时的 XlFs 单盘目录/legacy 对象目录 |
-| `Means:Storage:Disks` | `/data/xlfs/disk1...` | XlFs 多盘根目录，每块盘会写入 `.means.sys/format.json` |
-| `Means:Storage:ErasureDataShards` | `2` | XlFs EC profile 数据分片配置；普通 `PutObject` 在本地在线磁盘满足 data+parity 时写入 `reed-solomon-v1` shards |
-| `Means:Storage:ErasureParityShards` | `2` | XlFs EC profile 校验分片配置；磁盘不足或 multipart 路径暂回退/保持 full-copy quorum |
-| `Means:Storage:WriteQuorum` | `3` | XlFs 写成功 quorum |
-| `Means:Storage:ReadQuorum` | `1` | XlFs 读 quorum |
-| `Means:Storage:MetaSyncMode` | `Always` | XlFs metadata WAL flush 策略 |
-| `Means:Storage:VerifyChecksumOnRead` | `false` | XlFs/legacy 读取时是否同步校验 SHA256；开启会提升数据校验强度但会增加一次完整读 I/O |
-| `Means:Storage:DefaultAccessKey` | `meansadmin` | 首次初始化的默认 AccessKey |
-| `Means:Storage:DefaultSecretKey` | `meansadminsecret` | 首次初始化的默认 SecretKey |
-| `Means:Storage:MultipartUploadCleanupAgeHours` | `24` | 未完成 Multipart Upload 超过该时长后可被后台清理 |
-| `Means:Storage:MultipartUploadCleanupIntervalMinutes` | `60` | 未完成 Multipart Upload 后台清理间隔 |
-| `Means:Storage:GarbageCollectionIntervalSeconds` | `3600` | 存储孤儿文件 GC 后台扫描间隔 |
-| `Means:Storage:GarbageCollectionBatchSize` | `1000` | 每次 GC 最多处理的候选文件数 |
-| `Means:Storage:GarbageCollectionTempFileAgeMinutes` | `60` | 未引用文件和临时文件超过该年龄后才允许被 GC 清理 |
-| `Means:Storage:ReplicationIntervalSeconds` | `3600` | replication worker 预留后台任务间隔；未配置复制规则时只上报任务状态 |
-| `Means:RequestLimits:MaxUploadSizeBytes` | `1073741824` | 默认最大上传体积（1 GiB） |
-| `Means:RequestLimits:MaxConcurrentUploadRequests` | `64` | S3 `PUT` / multipart `UploadPart` 全局并发上限，超过后返回 `503 SlowDown` |
-| `Means:RateLimits:Enabled` | `true` | 是否启用 API 固定窗口限流 |
-| `Means:RateLimits:ConsoleLoginPermitLimit` | `10` | Console 登录窗口内允许请求数 |
-| `Means:RateLimits:ConsoleLoginWindowSeconds` | `60` | Console 登录限流窗口秒数 |
-| `Means:RateLimits:ConsoleApiPermitLimit` | `600` | Console API 窗口内允许请求数 |
-| `Means:RateLimits:ConsoleApiWindowSeconds` | `60` | Console API 限流窗口秒数 |
-| `Means:RateLimits:S3PermitLimit` | `1200` | S3 数据面窗口内允许请求数 |
-| `Means:RateLimits:S3WindowSeconds` | `60` | S3 数据面限流窗口秒数 |
-| `Means:Telemetry:Enabled` | `false` | 是否启用 OpenTelemetry tracing |
-| `Means:Telemetry:ServiceName` | `Means` | tracing resource service name |
-| `Means:Telemetry:OtlpEndpoint` | `` | OTLP exporter endpoint；为空时不导出到 collector |
-| `Means:Telemetry:SampleRatio` | `1.0` | trace 采样比例，范围 `0..1` |
-| `Means:Cluster:InternalAuthToken` | `` | 内部节点间 shard RPC token；为空时 `/api/internal/cluster` 端点返回 404 并关闭 |
-| `Means:Cluster:MaxShardTransferBytes` | `5368709120` | 单个内部 shard 流式传输上限，避免跨节点误传超大请求 |
-| `Means:Console:AdminUser` | `admin` | 控制台管理员用户名 |
-| `Means:Console:AdminPassword` | `meansadmin` | 控制台管理员密码 |
-| `Means:Console:SessionHours` | `8` | 控制台会话有效时长（小时） |
+All configuration is in `src/Means/appsettings.json` under the `Means` section.
 
-注意：
+### S3 Settings
 
-- 生产环境下，如果仍使用默认控制台账号密码，服务会在启动时拒绝运行。
-- 生产环境应同时替换默认 AccessKey/SecretKey。
-- 未完成的 Multipart Upload 会由后台任务自动清理元数据和 part 文件；前端取消/失败仍会 best-effort 调用 abort，但磁盘释放不依赖浏览器请求一定成功。
-- 默认读取路径不在返回对象前同步扫全文件做 SHA256，避免大对象 GET 双倍磁盘 I/O；需要强读时校验时可开启 `VerifyChecksumOnRead`，后台 scrub 仍会做校验和修复入队。
-- S3 单次 `PutObject` 和 multipart `UploadPart` 会共享上传并发限制；超过限制返回 S3 XML 错误 `SlowDown` 和 `Retry-After: 1`。
-- Console 登录、Console API 和 S3 数据面都支持固定窗口 API 限流；超过限制时 Console 返回 JSON `SlowDown`，S3 返回 XML `SlowDown`，并带 `Retry-After`。
-- Prometheus 可抓取 `/metrics`；推荐告警规则见 `docs/operations/deployment-observability.md`。
-- OpenTelemetry 默认关闭；设置 `Means:Telemetry:Enabled=true` 后会采集 ASP.NET Core 请求和 Means 后台任务 span，配置 `Means:Telemetry:OtlpEndpoint` 后导出到 collector。
+| Key | Default | Description |
+|---|---|---|
+| `Means:S3:ServiceHost` | `api.means.local` | Path-style hostname |
+| `Means:S3:DomainSuffix` | `means.local` | Virtual-hosted-style domain suffix |
+| `Means:S3:AliasPrefix` | `/s3` | Same-origin S3 alias prefix |
 
-## 开发与测试
+### Storage Settings
 
-### 运行测试
+| Key | Default | Description |
+|---|---|---|
+| `Means:Storage:ObjectsPath` | `data/objects` | Single-disk directory (when `Disks` not configured) |
+| `Means:Storage:Disks` | `/data/xlfs/disk1...` | XlFs multi-disk root directories; each gets `.means.sys/format.json` |
+| `Means:Storage:ErasureDataShards` | `2` | Reed-Solomon data shards; used when online disks satisfy data+parity |
+| `Means:Storage:ErasureParityShards` | `2` | Reed-Solomon parity shards; falls back to full-copy quorum when insufficient disks |
+| `Means:Storage:WriteQuorum` | `3` | Minimum disks required for write success |
+| `Means:Storage:ReadQuorum` | `1` | Minimum disks required for read success |
+| `Means:Storage:MetaSyncMode` | `Always` | Metadata WAL flush strategy |
+| `Means:Storage:VerifyChecksumOnRead` | `false` | Synchronous SHA256 verification on read (adds full I/O) |
+| `Means:Storage:DefaultAccessKey` | `meansadmin` | Default S3 access key |
+| `Means:Storage:DefaultSecretKey` | `meansadminsecret` | Default S3 secret key |
+| `Means:Storage:MultipartUploadCleanupAgeHours` | `24` | Age threshold for incomplete multipart upload cleanup |
+| `Means:Storage:MultipartUploadCleanupIntervalMinutes` | `60` | Cleanup background task interval |
+| `Means:Storage:GarbageCollectionIntervalSeconds` | `3600` | Orphan file GC scan interval |
+| `Means:Storage:GarbageCollectionBatchSize` | `1000` | Max candidates per GC run |
+| `Means:Storage:GarbageCollectionTempFileAgeMinutes` | `60` | Min age for temp/unreferenced file GC eligibility |
+| `Means:Storage:ReplicationIntervalSeconds` | `3600` | Replication worker interval (reports status only when no rules configured) |
+
+### Request Limits
+
+| Key | Default | Description |
+|---|---|---|
+| `Means:RequestLimits:MaxUploadSizeBytes` | `1073741824` (1 GiB) | Max per-request upload size |
+| `Means:RequestLimits:MaxConcurrentUploadRequests` | `64` | Global concurrency for `PUT`/`UploadPart`; returns `503 SlowDown` when exceeded |
+
+### Rate Limiting
+
+| Key | Default | Description |
+|---|---|---|
+| `Means:RateLimits:Enabled` | `true` | Enable fixed-window rate limiting |
+| `Means:RateLimits:ConsoleLoginPermitLimit` | `10` | Requests per console login window |
+| `Means:RateLimits:ConsoleLoginWindowSeconds` | `60` | Console login window (seconds) |
+| `Means:RateLimits:ConsoleApiPermitLimit` | `600` | Requests per console API window |
+| `Means:RateLimits:ConsoleApiWindowSeconds` | `60` | Console API window (seconds) |
+| `Means:RateLimits:S3PermitLimit` | `1200` | Requests per S3 data plane window |
+| `Means:RateLimits:S3WindowSeconds` | `60` | S3 data plane window (seconds) |
+
+### Telemetry
+
+| Key | Default | Description |
+|---|---|---|
+| `Means:Telemetry:Enabled` | `false` | Enable OpenTelemetry tracing |
+| `Means:Telemetry:ServiceName` | `Means` | Tracing resource service name |
+| `Means:Telemetry:OtlpEndpoint` | *(empty)* | OTLP exporter endpoint |
+| `Means:Telemetry:SampleRatio` | `1.0` | Trace sampling ratio `[0, 1]` |
+
+### Cluster
+
+| Key | Default | Description |
+|---|---|---|
+| `Means:Cluster:InternalAuthToken` | *(empty)* | Inter-node shard RPC token; empty = `/api/internal/cluster` returns 404 |
+| `Means:Cluster:MaxShardTransferBytes` | `5368709120` (5 GiB) | Per-shard streaming transfer limit |
+
+### Console
+
+| Key | Default | Description |
+|---|---|---|
+| `Means:Console:AdminUser` | `admin` | Admin username |
+| `Means:Console:AdminPassword` | `meansadmin` | Admin password |
+| `Means:Console:SessionHours` | `8` | Session duration (hours) |
+
+### Important Notes
+
+- **Production security:** The service refuses to start if default console credentials are detected. Always replace `AdminUser`/`AdminPassword` and `DefaultAccessKey`/`DefaultSecretKey` for production.
+- **Multipart cleanup:** Background tasks automatically clean up incomplete upload metadata and part files. Frontend cancellation best-effort calls abort, but disk reclamation does not depend on browser request success.
+- **Read verification:** SHA256 verification is off by default on reads. Enable `VerifyChecksumOnRead` for strong verification. Background scrub always checksums.
+- **Rate limiting responses:** Console → JSON `SlowDown`; S3 → XML `SlowDown`; both include `Retry-After` header.
+- **Prometheus:** Scrape `/metrics`. Recommended alerting rules in `docs/operations/deployment-observability.md`.
+- **OpenTelemetry:** Disabled by default. Set `Means:Telemetry:Enabled=true` to collect ASP.NET Core and background task spans. Configure `OtlpEndpoint` for collector export.
+
+---
+
+## Development & Testing
+
+### Running Tests
 
 ```bash
 dotnet test Means.slnx
 ```
 
-当前测试覆盖：
+| Test Project | Focus |
+|---|---|
+| `Means.UnitTests` | Address resolution, naming rules, policy evaluation, compression logic |
+| `Means.IntegrationTests` | S3 full-chain workflows, pre-signed URLs, Console API end-to-end |
+| `Means.ContractTests` | SDK protocol YAML spec vs. fixture completeness |
 
-- `Means.UnitTests`：地址解析、命名规则、策略判定、压缩规则
-- `Means.IntegrationTests`：S3 全链路、预签名、Console API 工作流
-- `Means.ContractTests`：SDK 协议 YAML 与 fixtures 完整性
-
-### 前端开发
+### Frontend Development
 
 ```bash
 cd web
@@ -207,17 +325,100 @@ npm install
 npm run dev
 ```
 
-- Vite 开发服务器默认代理 `/api` 与 `/s3` 到 `http://localhost:5178`
-- 构建命令 `npm run build` 会把前端产物输出到 `src/Means/wwwroot`
+- Vite dev server proxies `/api` and `/s3` to `http://localhost:5178`.
+- Build for production: `npm run build` → outputs to `src/Means/wwwroot`.
 
-## SDK 与规范
+---
 
-- C# SDK：`SDKs/csharp`
-- TypeScript SDK（browser-safe）：`SDKs/typescript/packages/sdk`
-- TypeScript Node 扩展（SigV4 签名/预签名）：`SDKs/typescript/packages/sdk-node`
-- 机器可读协议规范：`SDKs/spec/means-sdk-v1.yaml`
-- 人类可读协议文档：`SDKs/spec/means-sdk-v1.md`
+## SDKs & Specification
+
+| Package | Location | Description |
+|---|---|---|
+| **C# SDK** | `SDKs/csharp` | Full-featured .NET client SDK (`Means.Client.csproj`) |
+| **TypeScript SDK** | `SDKs/typescript/packages/sdk` | Browser-safe S3 client |
+| **TypeScript Node Extension** | `SDKs/typescript/packages/sdk-node` | SigV4 signing & pre-signing for Node.js |
+| **Protocol Spec (YAML)** | `SDKs/spec/means-sdk-v1.yaml` | Machine-readable API specification |
+| **Protocol Spec (Markdown)** | `SDKs/spec/means-sdk-v1.md` | Human-readable protocol documentation |
+| **SDK Examples** | `SDKs/examples/` | Usage examples in C# and TypeScript |
+
+---
+
+## Project Map
+
+```
+Means/
+├── CHANGELOG.md
+├── IMPLEMENTATION_PLAN.md
+├── Means.slnx                      # .NET solution file
+├── compose.yaml                    # Single-node Docker Compose
+├── compose.multinode.yaml          # Multi-node experimental Compose
+├── README.md                       # This file (English)
+├── README.zh.md                    # Chinese documentation
+│
+├── src/
+│   ├── Means/                      # ASP.NET Core host
+│   │   ├── Program.cs              # Application entry point
+│   │   ├── Composition/            # DI composition & service registration
+│   │   ├── Configuration/          # Configuration binding & validation
+│   │   ├── Endpoints/              # HTTP API endpoints (Console, etc.)
+│   │   ├── Middleware/             # ASP.NET Core middleware pipeline
+│   │   ├── Services/               # Application services
+│   │   ├── Security/               # Authentication & authorization
+│   │   ├── Serialization/          # JSON serialization configuration
+│   │   ├── Properties/             # Launch profiles, assembly info
+│   │   └── wwwroot/                # Built frontend artifacts
+│   │
+│   ├── Means.Core/                 # Core domain & abstractions
+│   │   ├── Abstractions/           # Storage interfaces & contracts
+│   │   ├── Constants/              # Well-known constants
+│   │   ├── Errors/                 # Domain error types
+│   │   ├── Models/                 # Domain models
+│   │   ├── Placement/              # Disk placement strategies
+│   │   ├── Policies/               # Storage policies
+│   │   └── Requests/               # Request model definitions
+│   │
+│   ├── Means.Infrastructure.XlFs/  # XlFs storage engine
+│   │   ├── Store/                  # Core store implementation
+│   │   ├── LogDb/                  # MeansLogDb metadata engine
+│   │   ├── Models/                 # XlFs-specific models
+│   │   └── XlFsOptions.cs          # Storage options
+│   │
+│   └── Means.Protocol.S3/         # S3 protocol layer
+│       ├── Addressing/             # Path-style & vhost-style resolution
+│       ├── Compression/            # Content negotiation & compression
+│       ├── Serialization/          # S3 XML response serialization
+│       ├── Signing/                # SigV4 signature validation
+│       └── Validation/             # Request validation
+│
+├── tests/
+│   ├── Means.UnitTests/
+│   ├── Means.IntegrationTests/
+│   └── Means.ContractTests/
+│
+├── SDKs/
+│   ├── csharp/
+│   ├── typescript/
+│   ├── spec/
+│   └── examples/
+│
+├── web/                            # React frontend (Vite + TypeScript)
+│   ├── src/                        # React components & pages
+│   ├── public/                     # Static assets
+│   ├── vite.config.ts              # Vite configuration
+│   └── package.json
+│
+├── docs/                           # Documentation site (Next.js)
+│   ├── content/docs/               # Documentation content
+│   ├── app/                        # Next.js app router pages
+│   └── source.config.ts
+│
+└── scripts/                        # Utility scripts
+    ├── benchmarks/                 # S3 benchmark scripts
+    └── compatibility/              # S3 client compatibility matrix
+```
+
+---
 
 ## License
 
-MIT，见 [LICENSE](LICENSE)。
+MIT — see [LICENSE](LICENSE) for details.
