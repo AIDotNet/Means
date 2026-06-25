@@ -48,6 +48,8 @@ public interface IObjectStore
 
     Task<DeleteObjectResult> DeleteObjectAsync(string bucketName, string key, string? versionId, CancellationToken cancellationToken);
 
+    Task<BatchDeleteResult> DeleteObjectsAsync(string bucketName, IReadOnlyList<BatchDeleteObjectIdentifier> objects, CancellationToken cancellationToken);
+
     Task<ObjectInfo> CopyObjectAsync(CopyObjectRequest request, CancellationToken cancellationToken);
 
     Task<ObjectTagSet> GetObjectTaggingAsync(string bucketName, string key, string? versionId, CancellationToken cancellationToken);

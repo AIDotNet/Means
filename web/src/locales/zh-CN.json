@@ -449,7 +449,10 @@
     "actions": {
       "menuAria": "{{objectKey}} 操作",
       "parent": "上一级",
-      "viewDetails": "查看详情"
+      "viewDetails": "查看详情",
+      "batchDelete": "删除 ({{count}})",
+      "selectAll": "全选",
+      "selectObject": "选择 {{objectKey}}"
     },
     "copyDialog": {
       "description": "输入目标 Object Key，复制会保留对象内容和元数据。",
@@ -459,6 +462,11 @@
     "deleteDialog": {
       "description": "删除后无法恢复，请确认对象 Key。",
       "title": "删除对象"
+    },
+    "batchDeleteDialog": {
+      "title": "批量删除对象",
+      "description": "将永久删除 {{count}} 个对象，此操作无法撤销。",
+      "deleting": "删除中..."
     },
     "detail": {
       "emptyMetadata": "无 Metadata",
@@ -473,7 +481,8 @@
       "loadDetailFailed": "读取对象详情失败",
       "loadFailed": "加载对象失败",
       "presignDownloadFailed": "生成下载链接失败",
-      "uploadFailed": "上传对象失败"
+      "uploadFailed": "上传对象失败",
+      "batchDeleteFailed": "批量删除失败"
     },
     "filters": {
       "prefix": "Prefix",
@@ -496,7 +505,9 @@
     "toast": {
       "copied": "对象已复制",
       "deleted": "对象已删除",
-      "uploaded": "对象已上传"
+      "uploaded": "对象已上传",
+      "batchDeleted": "已删除 {{count}} 个对象",
+      "batchDeletedWithErrors": "已删除 {{deleted}} 个对象，{{errors}} 个失败"
     }
   },
   "settings": {

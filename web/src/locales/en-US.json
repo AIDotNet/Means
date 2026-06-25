@@ -477,7 +477,10 @@
     "actions": {
       "menuAria": "{{objectKey}} actions",
       "parent": "Parent",
-      "viewDetails": "View details"
+      "viewDetails": "View details",
+      "batchDelete": "Delete ({{count}})",
+      "selectAll": "Select all",
+      "selectObject": "Select {{objectKey}}"
     },
     "copyDialog": {
       "description": "Enter the target object key. Copy keeps object content and metadata.",
@@ -487,6 +490,11 @@
     "deleteDialog": {
       "description": "This action cannot be undone. Confirm the object key before deleting.",
       "title": "Delete object"
+    },
+    "batchDeleteDialog": {
+      "title": "Batch delete objects",
+      "description": "This will permanently delete {{count}} object(s). This action cannot be undone.",
+      "deleting": "Deleting..."
     },
     "detail": {
       "emptyMetadata": "No metadata",
@@ -501,7 +509,8 @@
       "loadDetailFailed": "Failed to load object detail",
       "loadFailed": "Failed to load objects",
       "presignDownloadFailed": "Failed to generate download link",
-      "uploadFailed": "Failed to upload object"
+      "uploadFailed": "Failed to upload object",
+      "batchDeleteFailed": "Batch delete failed"
     },
     "filters": {
       "prefix": "Prefix",
@@ -524,7 +533,9 @@
     "toast": {
       "copied": "Object copied",
       "deleted": "Object deleted",
-      "uploaded": "Object uploaded"
+      "uploaded": "Object uploaded",
+      "batchDeleted": "Deleted {{count}} object(s)",
+      "batchDeletedWithErrors": "Deleted {{deleted}} object(s), {{errors}} failed"
     }
   },
   "settings": {

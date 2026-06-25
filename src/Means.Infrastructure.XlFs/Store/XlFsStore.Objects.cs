@@ -405,6 +405,38 @@ public sealed partial class XlFsStore
         return new DeleteObjectResult(bucketName, key, null, false);
     }
 
+    public async Task<BatchDeleteResult> DeleteObjectsAsync(
+        string bucketName,
+        IReadOnlyList<BatchDeleteObjectIdentifier> objects,
+        CancellationToken cancellationToken)
+    {
+        await EnsureBucketAsync(bucketName, cancellationToken);
+        var deleted = new List<DeleteObjectResult>(objects.Count);
+        var errors = new List<BatchDeleteError>();
+        foreach (var identifier in objects)
+        {
+            try
+            {
+                var result = await DeleteObjectAsync(bucketName, identifier.Key, identifier.VersionId, cancellationToken);
+                deleted.Add(result);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (MeansException ex) when (ex.StatusCode == 404)
+            {
+                deleted.Add(new DeleteObjectResult(bucketName, identifier.Key, identifier.VersionId, false));
+            }
+            catch (Exception ex)
+            {
+                errors.Add(new BatchDeleteError(identifier.Key, identifier.VersionId, ex is MeansException me ? me.Code : "InternalError", ex.Message));
+            }
+        }
+
+        return new BatchDeleteResult(bucketName, deleted, errors);
+    }
+
     public async Task<ObjectInfo> CopyObjectAsync(CopyObjectRequest request, CancellationToken cancellationToken)
     {
         await using var source = await GetObjectAsync(request.SourceBucket, request.SourceKey, request.SourceVersionId, cancellationToken);

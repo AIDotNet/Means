@@ -54,6 +54,7 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
         authenticated.MapGet("/buckets/{bucketName}/objects/versions", ListObjectVersionsAsync);
         authenticated.MapGet("/buckets/{bucketName}/objects/detail", HeadObjectAsync);
         authenticated.MapDelete("/buckets/{bucketName}/objects", DeleteObjectAsync);
+        authenticated.MapPost("/buckets/{bucketName}/objects/batch-delete", BatchDeleteObjectsAsync);
         authenticated.MapPost("/buckets/{bucketName}/objects/copy", CopyObjectAsync);
         authenticated.MapPost("/buckets/{bucketName}/objects/presign-upload", PresignUpload);
         authenticated.MapPost("/buckets/{bucketName}/objects/presign-download", PresignDownload);
@@ -578,6 +579,44 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
             deleted.VersionId is null ? null : $"VersionId={deleted.VersionId}; DeleteMarker={deleted.DeleteMarker}.",
             cancellationToken);
         return Results.NoContent();
+    }
+
+    private static async Task<IResult> BatchDeleteObjectsAsync(
+        HttpContext context,
+        string bucketName,
+        BatchDeleteObjectsRequest request,
+        IObjectStore store,
+        IConsoleStore consoleStore,
+        CancellationToken cancellationToken)
+    {
+        if (request.Objects is null || request.Objects.Count == 0)
+        {
+            throw new MeansException(MeansErrorCodes.InvalidArgument, "Objects list is required.", 400);
+        }
+
+        if (request.Objects.Count > 1000)
+        {
+            throw new MeansException(MeansErrorCodes.InvalidArgument, "Batch delete supports at most 1000 objects.", 400);
+        }
+
+        foreach (var item in request.Objects)
+        {
+            S3NameValidator.ValidateObjectKey(item.Key);
+        }
+
+        var identifiers = request.Objects
+            .Select(item => new BatchDeleteObjectIdentifier(item.Key, item.VersionId))
+            .ToArray();
+        var result = await store.DeleteObjectsAsync(bucketName, identifiers, cancellationToken);
+        await AppendAuditAsync(
+            consoleStore,
+            Actor(context),
+            "object.batch-delete",
+            bucketName,
+            result.Errors.Count == 0 ? "success" : "partial",
+            $"Deleted={result.Deleted.Count}; Errors={result.Errors.Count}.",
+            cancellationToken);
+        return Results.Ok(result);
     }
 
     private static async Task<IResult> CopyObjectAsync(
@@ -1272,6 +1311,10 @@ public sealed record PolicyRequest(string Policy);
 public sealed record PolicyResponse(string Policy);
 
 public sealed record CopyObjectConsoleRequest(string SourceBucket, string SourceKey, string DestinationKey);
+
+public sealed record BatchDeleteObjectsRequest(IReadOnlyList<BatchDeleteObjectItem> Objects);
+
+public sealed record BatchDeleteObjectItem(string Key, string? VersionId = null);
 
 public sealed record PresignRequest(string Key, int? ExpiresSeconds, string? VersionId = null);
 

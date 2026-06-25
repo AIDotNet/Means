@@ -21,6 +21,23 @@ public sealed record DeleteObjectResult(
     string? VersionId,
     bool DeleteMarker);
 
+public sealed record BatchDeleteObjectIdentifier(string Key, string? VersionId = null);
+
+public sealed record BatchDeleteRequest(
+    string BucketName,
+    IReadOnlyList<BatchDeleteObjectIdentifier> Objects);
+
+public sealed record BatchDeleteError(
+    string Key,
+    string? VersionId,
+    string Code,
+    string Message);
+
+public sealed record BatchDeleteResult(
+    string BucketName,
+    IReadOnlyList<DeleteObjectResult> Deleted,
+    IReadOnlyList<BatchDeleteError> Errors);
+
 public sealed record ObjectTagSet(IReadOnlyDictionary<string, string> Tags);
 
 public sealed record BucketLifecycleConfiguration(

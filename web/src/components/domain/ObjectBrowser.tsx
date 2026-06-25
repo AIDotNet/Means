@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -48,7 +49,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { useTranslation } from "@/i18n"
-import { api, type ListedObject, type ListObjectsResult, type ObjectInfo } from "@/lib/api-client"
+import { api, type BatchDeleteObjectItem, type ListedObject, type ListObjectsResult, type ObjectInfo } from "@/lib/api-client"
 import { fileNameFromKey, formatBytes, formatDateTime } from "@/lib/formatters"
 import {
   MULTIPART_UPLOAD_THRESHOLD_BYTES,
@@ -74,6 +75,9 @@ export function ObjectBrowser({ bucketName }: ObjectBrowserProps) {
   const [copySourceKey, setCopySourceKey] = useState<string | null>(null)
   const [copyDestinationKey, setCopyDestinationKey] = useState("")
   const [deleteTargetKey, setDeleteTargetKey] = useState<string | null>(null)
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set())
+  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false)
+  const [batchDeleting, setBatchDeleting] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -181,6 +185,55 @@ export function ObjectBrowser({ bucketName }: ObjectBrowserProps) {
     }
   }
 
+  const toggleKey = (key: string) => {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) {
+        next.delete(key)
+      } else {
+        next.add(key)
+      }
+      return next
+    })
+  }
+
+  const toggleAll = () => {
+    if (objects.length > 0 && selectedKeys.size === objects.length) {
+      setSelectedKeys(new Set())
+    } else {
+      setSelectedKeys(new Set(objects.map((object) => object.key)))
+    }
+  }
+
+  const confirmBatchDelete = async () => {
+    if (selectedKeys.size === 0) {
+      return
+    }
+
+    setBatchDeleting(true)
+    try {
+      const items: BatchDeleteObjectItem[] = Array.from(selectedKeys).map((key) => ({ key }))
+      const result = await api.batchDeleteObjects(bucketName, items)
+      if (result.errors.length > 0) {
+        toast.warning(
+          t("objectBrowser.toast.batchDeletedWithErrors", {
+            deleted: result.deleted.length,
+            errors: result.errors.length,
+          })
+        )
+      } else {
+        toast.success(t("objectBrowser.toast.batchDeleted", { count: result.deleted.length }))
+      }
+      setSelectedKeys(new Set())
+      setBatchDeleteOpen(false)
+      await load()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("objectBrowser.errors.batchDeleteFailed"))
+    } finally {
+      setBatchDeleting(false)
+    }
+  }
+
   return (
     <section className="overflow-hidden rounded-lg border bg-card text-card-foreground shadow-xs">
       <div className="flex flex-col gap-3 border-b p-4 xl:flex-row xl:items-end">
@@ -206,6 +259,12 @@ export function ObjectBrowser({ bucketName }: ObjectBrowserProps) {
             <RefreshCwIcon className={loading ? "animate-spin" : ""} />
             {t("common.actions.refresh")}
           </Button>
+          {selectedKeys.size > 0 ? (
+            <Button variant="destructive" onClick={() => setBatchDeleteOpen(true)}>
+              <Trash2Icon />
+              {t("objectBrowser.actions.batchDelete", { count: selectedKeys.size })}
+            </Button>
+          ) : null}
           <Button onClick={() => setUploadOpen(true)}>
             <UploadCloudIcon />
             {t("common.actions.upload")}
@@ -216,6 +275,15 @@ export function ObjectBrowser({ bucketName }: ObjectBrowserProps) {
       <Table>
         <TableHeader>
           <TableRow>
+            <TableHead className="w-10">
+              {objects.length > 0 ? (
+                <Checkbox
+                  checked={objects.length > 0 && selectedKeys.size === objects.length}
+                  onCheckedChange={toggleAll}
+                  aria-label={t("objectBrowser.actions.selectAll")}
+                />
+              ) : null}
+            </TableHead>
             <TableHead>{t("objectBrowser.table.columns.objectKey")}</TableHead>
             <TableHead>{t("objectBrowser.table.columns.type")}</TableHead>
             <TableHead>{t("objectBrowser.table.columns.size")}</TableHead>
@@ -226,6 +294,7 @@ export function ObjectBrowser({ bucketName }: ObjectBrowserProps) {
         <TableBody>
           {prefixes.map((nextPrefix) => (
             <TableRow key={nextPrefix}>
+              <TableCell />
               <TableCell>
                 <button
                   className="flex min-w-0 items-center gap-2 font-medium text-primary"
@@ -245,6 +314,13 @@ export function ObjectBrowser({ bucketName }: ObjectBrowserProps) {
           ))}
           {objects.map((object) => (
             <TableRow key={object.key}>
+              <TableCell>
+                <Checkbox
+                  checked={selectedKeys.has(object.key)}
+                  onCheckedChange={() => toggleKey(object.key)}
+                  aria-label={t("objectBrowser.actions.selectObject", { objectKey: object.key })}
+                />
+              </TableCell>
               <TableCell>
                 <button
                   className="flex min-w-0 items-center gap-2 text-left font-medium hover:text-primary"
@@ -276,14 +352,14 @@ export function ObjectBrowser({ bucketName }: ObjectBrowserProps) {
           ))}
           {loading && prefixes.length + objects.length === 0 ? (
             <TableRow>
-              <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
+              <TableCell colSpan={6} className="h-32 text-center text-muted-foreground">
                 {t("objectBrowser.table.states.loading")}
               </TableCell>
             </TableRow>
           ) : null}
           {!loading && prefixes.length + objects.length === 0 ? (
             <TableRow>
-              <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
+              <TableCell colSpan={6} className="h-32 text-center text-muted-foreground">
                 {t("objectBrowser.table.states.empty")}
               </TableCell>
             </TableRow>
@@ -345,6 +421,36 @@ export function ObjectBrowser({ bucketName }: ObjectBrowserProps) {
             <AlertDialogCancel>{t("common.actions.cancel")}</AlertDialogCancel>
             <AlertDialogAction variant="destructive" onClick={deleteObject}>
               {t("common.actions.delete")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={batchDeleteOpen} onOpenChange={(open) => !open && setBatchDeleteOpen(false)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("objectBrowser.batchDeleteDialog.title")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("objectBrowser.batchDeleteDialog.description", { count: selectedKeys.size })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="max-h-48 overflow-y-auto rounded-md border bg-muted/40 p-2">
+            {Array.from(selectedKeys).map((key) => (
+              <div key={key} className="px-1 py-0.5 font-mono text-xs break-all">
+                {key}
+              </div>
+            ))}
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={batchDeleting}>{t("common.actions.cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={batchDeleting}
+              onClick={confirmBatchDelete}
+            >
+              {batchDeleting
+                ? t("objectBrowser.batchDeleteDialog.deleting")
+                : t("common.actions.delete")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

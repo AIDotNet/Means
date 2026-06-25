@@ -450,6 +450,27 @@ export type PresignedTransfer = {
   expiresSeconds: number
 }
 
+export type BatchDeleteObjectItem = {
+  key: string
+  versionId?: string | null
+}
+
+export type BatchDeleteResult = {
+  bucketName: string
+  deleted: Array<{
+    bucketName: string
+    key: string
+    versionId: string | null
+    deleteMarker: boolean
+  }>
+  errors: Array<{
+    key: string
+    versionId: string | null
+    code: string
+    message: string
+  }>
+}
+
 export type MultipartUpload = {
   bucketName: string
   key: string
@@ -648,6 +669,14 @@ export const api = {
       { method: "DELETE" }
     )
   },
+  batchDeleteObjects: (bucketName: string, objects: BatchDeleteObjectItem[]) =>
+    request<BatchDeleteResult>(
+      `/api/console/buckets/${encodeURIComponent(bucketName)}/objects/batch-delete`,
+      {
+        method: "POST",
+        body: { objects },
+      }
+    ),
   copyObject: (bucketName: string, sourceBucket: string, sourceKey: string, destinationKey: string) =>
     request<ObjectInfo>(
       `/api/console/buckets/${encodeURIComponent(bucketName)}/objects/copy`,
