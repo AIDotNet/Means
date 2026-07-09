@@ -108,7 +108,12 @@ public sealed record XlHealRecord(
     DateTimeOffset? NextAttemptAt,
     string? LastError);
 
-public sealed record XlAccessKeyRecord(string AccessKey, string SecretKey, bool Enabled, DateTimeOffset CreatedAt);
+public sealed record XlAccessKeyRecord(
+    string AccessKey,
+    string SecretKey,
+    bool Enabled,
+    DateTimeOffset CreatedAt,
+    string? PolicyJson = null);
 
 public sealed record XlStoragePoolRecord(
     string PoolId,

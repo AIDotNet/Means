@@ -118,7 +118,8 @@
   "accessKeys": {
     "actions": {
       "create": "Create access key",
-      "creating": "Creating..."
+      "creating": "Creating...",
+      "editPolicy": "Edit policy"
     },
     "deleteDialog": {
       "description": "After deletion, S3 requests using this key will no longer authenticate.",
@@ -127,7 +128,9 @@
     "errors": {
       "createFailed": "Failed to create access key",
       "deleteFailed": "Failed to delete access key",
-      "loadFailed": "Failed to load access keys"
+      "loadFailed": "Failed to load access keys",
+      "policySaveFailed": "Failed to save access key policy",
+      "policyDeleteFailed": "Failed to delete access key policy"
     },
     "form": {
       "customAccessKeyLabel": "Custom Access Key (optional)",
@@ -142,7 +145,8 @@
       "columns": {
         "accessKey": "Access Key",
         "createdAt": "Created",
-        "status": "Status"
+        "status": "Status",
+        "policy": "Policy"
       },
       "states": {
         "empty": "No access keys",
@@ -151,10 +155,20 @@
       "status": {
         "disabled": "Disabled",
         "enabled": "Enabled"
+      },
+      "policy": {
+        "attached": "Attached",
+        "none": "None"
       }
     },
     "toast": {
-      "deleted": "Access key deleted"
+      "deleted": "Access key deleted",
+      "policySaved": "Access key policy saved",
+      "policyDeleted": "Access key policy deleted"
+    },
+    "policyDialog": {
+      "title": "Access key policy",
+      "description": "Manage the IAM-style policy bound to {{accessKey}}."
     }
   },
   "audit": {
@@ -261,6 +275,13 @@
         "loadFailed": "Failed to load lifecycle settings",
         "saveFailed": "Failed to save lifecycle settings",
         "deleteFailed": "Failed to delete lifecycle rules"
+      },
+      "templates": "Templates",
+      "templateOptions": {
+        "expire30": "Expire objects after 30 days",
+        "expire90Abort7": "Expire after 90 days + abort MPU after 7 days",
+        "noncurrent30": "Cleanup noncurrent versions after 30 days",
+        "prefixTempExpire7": "Expire temp/ prefix after 7 days"
       }
     }
   },
@@ -428,14 +449,27 @@
       "deletePolicy": "Delete policy",
       "format": "Format",
       "publicReadTemplate": "Public read template",
-      "savePolicy": "Save policy"
+      "savePolicy": "Save policy",
+      "scopedTemplate": "Scoped allow template",
+      "templates": "Templates"
     },
     "description": "Edit the JSON document for an S3-compatible bucket policy.",
     "errors": {
       "invalidForFormat": "The current content is not valid JSON and cannot be formatted.",
       "invalidForSave": "The policy is not valid JSON and cannot be saved."
     },
-    "title": "Bucket Policy"
+    "title": "Bucket Policy",
+    "accessKeyDescription": "Edit the JSON document for an access-key scoped policy. Principal is optional.",
+    "templates": {
+      "publicRead": "Public read",
+      "publicReadAuthenticatedWrite": "Public list/read + key write",
+      "authenticatedReadWrite": "Single access key read/write",
+      "denyDelete": "Public list/read, deny delete",
+      "scopedAllow": "Scoped allow on one bucket",
+      "readOnly": "Read-only on one bucket",
+      "listBucketsOnly": "List buckets only",
+      "fullBucketAccess": "Full access on one bucket"
+    }
   },
   "transfer": {
     "uploadConnectionFailed": "Upload connection failed",
@@ -480,7 +514,9 @@
       "viewDetails": "View details",
       "batchDelete": "Delete ({{count}})",
       "selectAll": "Select all",
-      "selectObject": "Select {{objectKey}}"
+      "selectObject": "Select {{objectKey}}",
+      "loadMore": "Load more",
+      "loadingMore": "Loading more..."
     },
     "copyDialog": {
       "description": "Enter the target object key. Copy keeps object content and metadata.",

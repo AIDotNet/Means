@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using Means.Core;
 
 namespace Means.Infrastructure.XlFs;
@@ -9,7 +9,9 @@ public sealed partial class XlFsStore
     {
         await EnsureInitializedAsync(cancellationToken);
         var record = await Db.GetJsonAsync<XlAccessKeyRecord>(Keys.AccessKey(accessKey), cancellationToken);
-        return record is null ? null : new AccessKeyCredential(record.AccessKey, record.SecretKey, record.Enabled);
+        return record is null
+            ? null
+            : new AccessKeyCredential(record.AccessKey, record.SecretKey, record.Enabled, record.PolicyJson);
     }
 
     public async Task<string?> GetPolicyAsync(string bucketName, CancellationToken cancellationToken)
@@ -498,11 +500,18 @@ public sealed partial class XlFsStore
         var rows = await Db.ScanPrefixAsync(Keys.AccessKeyPrefix, 100_000, null, cancellationToken);
         return rows.Select(row => Deserialize<XlAccessKeyRecord>(row.Value))
             .OrderByDescending(record => record.CreatedAt)
-            .Select(record => new AccessKeyInfo(record.AccessKey, record.Enabled, record.CreatedAt))
+            .Select(record => new AccessKeyInfo(
+                record.AccessKey,
+                record.Enabled,
+                record.CreatedAt,
+                HasPolicy: !string.IsNullOrWhiteSpace(record.PolicyJson)))
             .ToArray();
     }
 
-    public async Task<AccessKeySecretResult> CreateAccessKeyAsync(string? accessKey, CancellationToken cancellationToken)
+    public async Task<AccessKeySecretResult> CreateAccessKeyAsync(
+        string? accessKey,
+        string? policyJson,
+        CancellationToken cancellationToken)
     {
         await EnsureInitializedAsync(cancellationToken);
         var key = string.IsNullOrWhiteSpace(accessKey) ? "means_" + RandomHex(10) : accessKey.Trim();
@@ -511,11 +520,12 @@ public sealed partial class XlFsStore
             throw new MeansException(MeansErrorCodes.InvalidArgument, "Access key already exists.", 409);
         }
 
+        var normalizedPolicy = NormalizeAccessKeyPolicy(policyJson);
         var secret = RandomHex(32);
         var createdAt = DateTimeOffset.UtcNow;
-        var record = new XlAccessKeyRecord(key, secret, true, createdAt);
+        var record = new XlAccessKeyRecord(key, secret, true, createdAt, normalizedPolicy);
         await Db.PutJsonAsync(Keys.AccessKey(key), record, cancellationToken);
-        return new AccessKeySecretResult(key, secret, true, createdAt);
+        return new AccessKeySecretResult(key, secret, true, createdAt, HasPolicy: normalizedPolicy is not null);
     }
 
     public async Task DeleteAccessKeyAsync(string accessKey, CancellationToken cancellationToken)
@@ -527,6 +537,53 @@ public sealed partial class XlFsStore
         }
 
         await Db.PutBatchAsync([new LogDbMutation(Keys.AccessKey(accessKey), null, true)], cancellationToken);
+    }
+
+    public async Task<string?> GetAccessKeyPolicyAsync(string accessKey, CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        var record = await Db.GetJsonAsync<XlAccessKeyRecord>(Keys.AccessKey(accessKey), cancellationToken)
+            ?? throw new MeansException(MeansErrorCodes.InvalidArgument, "Access key does not exist.", 404);
+        return string.IsNullOrWhiteSpace(record.PolicyJson) ? null : record.PolicyJson;
+    }
+
+    public async Task PutAccessKeyPolicyAsync(string accessKey, string policyJson, CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        var record = await Db.GetJsonAsync<XlAccessKeyRecord>(Keys.AccessKey(accessKey), cancellationToken)
+            ?? throw new MeansException(MeansErrorCodes.InvalidArgument, "Access key does not exist.", 404);
+        var normalizedPolicy = NormalizeAccessKeyPolicy(policyJson)
+            ?? throw new MeansException(MeansErrorCodes.InvalidArgument, "Policy is required.", 400);
+        await Db.PutJsonAsync(
+            Keys.AccessKey(accessKey),
+            record with { PolicyJson = normalizedPolicy },
+            cancellationToken);
+    }
+
+    public async Task DeleteAccessKeyPolicyAsync(string accessKey, CancellationToken cancellationToken)
+    {
+        await EnsureInitializedAsync(cancellationToken);
+        var record = await Db.GetJsonAsync<XlAccessKeyRecord>(Keys.AccessKey(accessKey), cancellationToken)
+            ?? throw new MeansException(MeansErrorCodes.InvalidArgument, "Access key does not exist.", 404);
+        if (string.IsNullOrWhiteSpace(record.PolicyJson))
+        {
+            return;
+        }
+
+        await Db.PutJsonAsync(
+            Keys.AccessKey(accessKey),
+            record with { PolicyJson = null },
+            cancellationToken);
+    }
+
+    private static string? NormalizeAccessKeyPolicy(string? policyJson)
+    {
+        if (string.IsNullOrWhiteSpace(policyJson))
+        {
+            return null;
+        }
+
+        return policyJson.Trim();
     }
 
     public async Task AppendAuditAsync(AuditEntry entry, CancellationToken cancellationToken)

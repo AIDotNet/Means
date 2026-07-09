@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from "react"
-import { KeyRoundIcon, PlusIcon, Trash2Icon } from "lucide-react"
+﻿import { useCallback, useEffect, useState } from "react"
+import { FileJsonIcon, KeyRoundIcon, PlusIcon, Trash2Icon } from "lucide-react"
 import { toast } from "sonner"
 
 import { AccessKeyDialog } from "@/components/domain/AccessKeyDialog"
+import { PolicyEditor } from "@/components/domain/PolicyEditor"
 import { PageHeader } from "@/components/layout/PageHeader"
 import {
   AlertDialog,
@@ -16,6 +17,13 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import {
   Table,
@@ -37,6 +45,9 @@ export function AccessKeysPage() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
+  const [policyTarget, setPolicyTarget] = useState<string | null>(null)
+  const [policyValue, setPolicyValue] = useState("")
+  const [policyLoading, setPolicyLoading] = useState(false)
   const [loading, setLoading] = useState(false)
 
   const load = useCallback(async () => {
@@ -84,6 +95,59 @@ export function AccessKeysPage() {
     }
   }
 
+  const openPolicyEditor = async (key: string) => {
+    setPolicyTarget(key)
+    setPolicyLoading(true)
+    setPolicyValue("")
+    try {
+      const result = await api.getAccessKeyPolicy(key)
+      setPolicyValue(result.policy)
+    } catch {
+      setPolicyValue(
+        JSON.stringify(
+          {
+            Version: "2012-10-17",
+            Statement: [],
+          },
+          null,
+          2
+        )
+      )
+    } finally {
+      setPolicyLoading(false)
+    }
+  }
+
+  const savePolicy = async () => {
+    if (!policyTarget) {
+      return
+    }
+
+    try {
+      await api.putAccessKeyPolicy(policyTarget, policyValue)
+      toast.success(t("accessKeys.toast.policySaved"))
+      setPolicyTarget(null)
+      await load()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("accessKeys.errors.policySaveFailed"))
+    }
+  }
+
+  const deletePolicy = async () => {
+    if (!policyTarget) {
+      return
+    }
+
+    try {
+      await api.deleteAccessKeyPolicy(policyTarget)
+      toast.success(t("accessKeys.toast.policyDeleted"))
+      setPolicyTarget(null)
+      await load()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("accessKeys.errors.policyDeleteFailed"))
+    }
+  }
+
   return (
     <>
       <PageHeader
@@ -113,8 +177,9 @@ export function AccessKeysPage() {
             <TableRow>
               <TableHead>{t("accessKeys.table.columns.accessKey")}</TableHead>
               <TableHead>{t("accessKeys.table.columns.status")}</TableHead>
+              <TableHead>{t("accessKeys.table.columns.policy")}</TableHead>
               <TableHead>{t("accessKeys.table.columns.createdAt")}</TableHead>
-              <TableHead className="w-12" />
+              <TableHead className="w-24" />
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -131,25 +196,42 @@ export function AccessKeysPage() {
                     {key.enabled ? t("accessKeys.table.status.enabled") : t("accessKeys.table.status.disabled")}
                   </Badge>
                 </TableCell>
+                <TableCell>
+                  <Badge variant={key.hasPolicy ? "default" : "outline"}>
+                    {key.hasPolicy
+                      ? t("accessKeys.table.policy.attached")
+                      : t("accessKeys.table.policy.none")}
+                  </Badge>
+                </TableCell>
                 <TableCell className="text-muted-foreground">{formatDateTime(key.createdAt)}</TableCell>
                 <TableCell>
-                  <Button variant="ghost" size="icon-sm" onClick={() => setDeleteTarget(key.accessKey)}>
-                    <Trash2Icon />
-                    <span className="sr-only">{t("common.actions.delete")}</span>
-                  </Button>
+                  <div className="flex justify-end gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => void openPolicyEditor(key.accessKey)}
+                    >
+                      <FileJsonIcon />
+                      <span className="sr-only">{t("accessKeys.actions.editPolicy")}</span>
+                    </Button>
+                    <Button variant="ghost" size="icon-sm" onClick={() => setDeleteTarget(key.accessKey)}>
+                      <Trash2Icon />
+                      <span className="sr-only">{t("common.actions.delete")}</span>
+                    </Button>
+                  </div>
                 </TableCell>
               </TableRow>
             ))}
             {loading && keys.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={4} className="h-32 text-center text-muted-foreground">
+                <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
                   {t("accessKeys.table.states.loading")}
                 </TableCell>
               </TableRow>
             ) : null}
             {!loading && keys.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={4} className="h-32 text-center text-muted-foreground">
+                <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
                   {t("accessKeys.table.states.empty")}
                 </TableCell>
               </TableRow>
@@ -158,6 +240,28 @@ export function AccessKeysPage() {
         </Table>
       </div>
       <AccessKeyDialog created={created} open={dialogOpen} onOpenChange={setDialogOpen} />
+      <Dialog open={policyTarget !== null} onOpenChange={(open) => !open && setPolicyTarget(null)}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>{t("accessKeys.policyDialog.title")}</DialogTitle>
+            <DialogDescription>
+              {t("accessKeys.policyDialog.description", { accessKey: policyTarget ?? "" })}
+            </DialogDescription>
+          </DialogHeader>
+          {policyLoading ? (
+            <p className="text-sm text-muted-foreground">{t("accessKeys.table.states.loading")}</p>
+          ) : (
+            <PolicyEditor
+              mode="accessKey"
+              value={policyValue}
+              onChange={setPolicyValue}
+              onSave={savePolicy}
+              onDelete={deletePolicy}
+              compact
+            />
+          )}
+        </DialogContent>
+      </Dialog>
       <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>

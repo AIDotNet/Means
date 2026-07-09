@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using System.Security.Claims;
 using System.Text.Json;
 using Means.Configuration;
@@ -65,6 +65,9 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
         authenticated.MapGet("/access-keys", AccessKeysAsync);
         authenticated.MapPost("/access-keys", CreateAccessKeyAsync);
         authenticated.MapDelete("/access-keys/{accessKey}", DeleteAccessKeyAsync);
+        authenticated.MapGet("/access-keys/{accessKey}/policy", GetAccessKeyPolicyAsync);
+        authenticated.MapPut("/access-keys/{accessKey}/policy", PutAccessKeyPolicyAsync);
+        authenticated.MapDelete("/access-keys/{accessKey}/policy", DeleteAccessKeyPolicyAsync);
         authenticated.MapGet("/settings", SettingsAsync);
         authenticated.MapPut("/settings", UpdateSettingsAsync);
         authenticated.MapGet("/audit", AuditAsync);
@@ -794,8 +797,12 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
         IConsoleStore consoleStore,
         CancellationToken cancellationToken)
     {
-        var created = await consoleStore.CreateAccessKeyAsync(request.AccessKey, cancellationToken);
-        await AppendAuditAsync(consoleStore, Actor(context), "access-key.create", created.AccessKey, "success", "Secret was returned once.", cancellationToken);
+        ValidateOptionalPolicyJson(request.Policy);
+        var created = await consoleStore.CreateAccessKeyAsync(request.AccessKey, request.Policy, cancellationToken);
+        var note = created.HasPolicy
+            ? "Secret was returned once. Policy was attached."
+            : "Secret was returned once.";
+        await AppendAuditAsync(consoleStore, Actor(context), "access-key.create", created.AccessKey, "success", note, cancellationToken);
         return Results.Created($"/api/console/access-keys/{created.AccessKey}", created);
     }
 
@@ -808,6 +815,71 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
         await consoleStore.DeleteAccessKeyAsync(accessKey, cancellationToken);
         await AppendAuditAsync(consoleStore, Actor(context), "access-key.delete", accessKey, "success", null, cancellationToken);
         return Results.NoContent();
+    }
+
+    private static async Task<IResult> GetAccessKeyPolicyAsync(
+        string accessKey,
+        IConsoleStore consoleStore,
+        CancellationToken cancellationToken)
+    {
+        var policy = await consoleStore.GetAccessKeyPolicyAsync(accessKey, cancellationToken);
+        if (policy is null)
+        {
+            return Results.NotFound();
+        }
+
+        return Results.Ok(new PolicyResponse(policy));
+    }
+
+    private static async Task<IResult> PutAccessKeyPolicyAsync(
+        HttpContext context,
+        string accessKey,
+        PolicyRequest request,
+        IConsoleStore consoleStore,
+        CancellationToken cancellationToken)
+    {
+        ValidateRequiredPolicyJson(request.Policy);
+        await consoleStore.PutAccessKeyPolicyAsync(accessKey, request.Policy, cancellationToken);
+        await AppendAuditAsync(consoleStore, Actor(context), "access-key.policy.put", accessKey, "success", null, cancellationToken);
+        return Results.NoContent();
+    }
+
+    private static async Task<IResult> DeleteAccessKeyPolicyAsync(
+        HttpContext context,
+        string accessKey,
+        IConsoleStore consoleStore,
+        CancellationToken cancellationToken)
+    {
+        await consoleStore.DeleteAccessKeyPolicyAsync(accessKey, cancellationToken);
+        await AppendAuditAsync(consoleStore, Actor(context), "access-key.policy.delete", accessKey, "success", null, cancellationToken);
+        return Results.NoContent();
+    }
+
+    private static void ValidateOptionalPolicyJson(string? policy)
+    {
+        if (string.IsNullOrWhiteSpace(policy))
+        {
+            return;
+        }
+
+        ValidateRequiredPolicyJson(policy);
+    }
+
+    private static void ValidateRequiredPolicyJson(string? policy)
+    {
+        if (string.IsNullOrWhiteSpace(policy))
+        {
+            throw new MeansException(MeansErrorCodes.InvalidArgument, "Policy is required.", 400);
+        }
+
+        try
+        {
+            using var _ = JsonDocument.Parse(policy);
+        }
+        catch (JsonException)
+        {
+            throw new MeansException(MeansErrorCodes.InvalidArgument, "Policy is not valid JSON.", 400);
+        }
     }
 
     private static async Task<IResult> AuditAsync(int? limit, IConsoleStore consoleStore, CancellationToken cancellationToken)
@@ -1337,7 +1409,7 @@ public sealed record CompletedMultipartPartConsoleRequest(int PartNumber, string
 
 public sealed record AbortMultipartConsoleRequest(string Key, string UploadId);
 
-public sealed record CreateAccessKeyRequest(string? AccessKey);
+public sealed record CreateAccessKeyRequest(string? AccessKey, string? Policy = null);
 
 public sealed record UpdateSystemSettingsRequest(long MaxUploadSizeBytes, string? PublicOrigin = null);
 

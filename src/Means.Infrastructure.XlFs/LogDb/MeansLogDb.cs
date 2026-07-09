@@ -37,7 +37,8 @@ public sealed partial class MeansLogDb : IAsyncDisposable
         try
         {
             await db.ReplayAsync(cancellationToken);
-            db._wal = new FileStream(db._walPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            // Exclusive share mode is required so a second process fails immediately on Unix and Windows.
+            db._wal = new FileStream(db._walPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
             db._wal.Seek(0, SeekOrigin.End);
             return db;
         }
@@ -265,7 +266,7 @@ public sealed partial class MeansLogDb : IAsyncDisposable
 
             _wal?.Dispose();
             File.WriteAllBytes(_walPath, []);
-            _wal = new FileStream(_walPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            _wal = new FileStream(_walPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
         }
         finally
         {
@@ -339,7 +340,7 @@ public sealed partial class MeansLogDb : IAsyncDisposable
         }
 
         input.Close();
-        using var truncate = new FileStream(_walPath, FileMode.Open, FileAccess.Write, FileShare.Read);
+        using var truncate = new FileStream(_walPath, FileMode.Open, FileAccess.Write, FileShare.None);
         truncate.SetLength(validLength);
     }
 

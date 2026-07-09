@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -724,12 +724,47 @@ public sealed class ConsoleApiTests
         var accessKey = await ReadJsonAsync<AccessKeySecretResponse>(accessKeyResponse);
         Assert.Equal("console-test-key", accessKey.AccessKey);
         Assert.NotEmpty(accessKey.SecretKey);
+        Assert.False(accessKey.HasPolicy);
+
+        const string accessKeyPolicy = """
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": "s3:GetObject",
+                  "Resource": "arn:aws:s3:::console-bucket/*"
+                }
+              ]
+            }
+            """;
+        var putAccessKeyPolicy = await client.PutAsJsonAsync(
+            "/api/console/access-keys/console-test-key/policy",
+            new PolicyRequest(accessKeyPolicy));
+        Assert.Equal(HttpStatusCode.NoContent, putAccessKeyPolicy.StatusCode);
+
+        var getAccessKeyPolicy = await client.GetAsync("/api/console/access-keys/console-test-key/policy");
+        Assert.Equal(HttpStatusCode.OK, getAccessKeyPolicy.StatusCode);
+        var storedAccessKeyPolicy = await ReadJsonAsync<AccessKeyPolicyResponse>(getAccessKeyPolicy);
+        Assert.Contains("s3:GetObject", storedAccessKeyPolicy.Policy);
 
         var listKeysResponse = await client.GetAsync("/api/console/access-keys");
         Assert.Equal(HttpStatusCode.OK, listKeysResponse.StatusCode);
         var listKeysJson = await listKeysResponse.Content.ReadAsStringAsync();
         Assert.Contains("console-test-key", listKeysJson);
+        Assert.Contains("\"hasPolicy\":true", listKeysJson);
         Assert.DoesNotContain(accessKey.SecretKey, listKeysJson);
+
+        var createWithPolicy = await client.PostAsJsonAsync(
+            "/api/console/access-keys",
+            new AccessKeyRequest("console-policy-key", accessKeyPolicy));
+        Assert.Equal(HttpStatusCode.Created, createWithPolicy.StatusCode);
+        var policyKey = await ReadJsonAsync<AccessKeySecretResponse>(createWithPolicy);
+        Assert.True(policyKey.HasPolicy);
+
+        var deleteAccessKeyPolicy = await client.DeleteAsync("/api/console/access-keys/console-test-key/policy");
+        Assert.Equal(HttpStatusCode.NoContent, deleteAccessKeyPolicy.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/api/console/access-keys/console-test-key/policy")).StatusCode);
 
         var keyCredentials = new SigV4SigningCredentials(accessKey.AccessKey, accessKey.SecretKey);
         var signedCreate = new HttpRequestMessage(HttpMethod.Put, "https://localhost/s3/key-owned");
@@ -761,6 +796,8 @@ public sealed class ConsoleApiTests
         Assert.Contains(entries, entry => entry.Action == "diagnostics.read");
         Assert.Contains(entries, entry => entry.Action == "background-task.read");
         Assert.Contains(entries, entry => entry.Action == "background-task.run");
+        Assert.Contains(entries, entry => entry.Action == "access-key.policy.put");
+        Assert.Contains(entries, entry => entry.Action == "access-key.policy.delete");
         Assert.Contains(entries, entry => entry.Action == "access-key.delete");
 
         var fallback = await client.GetAsync("/buckets/console-bucket");
@@ -947,9 +984,16 @@ public sealed class ConsoleApiTests
 
     private sealed record PolicyRequest(string Policy);
 
-    private sealed record AccessKeyRequest(string AccessKey);
+    private sealed record AccessKeyRequest(string AccessKey, string? Policy = null);
 
-    private sealed record AccessKeySecretResponse(string AccessKey, string SecretKey, bool Enabled, DateTimeOffset CreatedAt);
+    private sealed record AccessKeySecretResponse(
+        string AccessKey,
+        string SecretKey,
+        bool Enabled,
+        DateTimeOffset CreatedAt,
+        bool HasPolicy);
+
+    private sealed record AccessKeyPolicyResponse(string Policy);
 
     private sealed record AuditEntryResponse(string Action, string Resource, string Status);
 

@@ -1,4 +1,4 @@
-namespace Means.Core;
+﻿namespace Means.Core;
 
 /// <summary>
 /// Administrative read/write boundary used by the built-in web console.
@@ -44,9 +44,18 @@ public interface IConsoleStore
 
     Task<IReadOnlyList<AccessKeyInfo>> ListAccessKeysAsync(CancellationToken cancellationToken);
 
-    Task<AccessKeySecretResult> CreateAccessKeyAsync(string? accessKey, CancellationToken cancellationToken);
+    Task<AccessKeySecretResult> CreateAccessKeyAsync(
+        string? accessKey,
+        string? policyJson,
+        CancellationToken cancellationToken);
 
     Task DeleteAccessKeyAsync(string accessKey, CancellationToken cancellationToken);
+
+    Task<string?> GetAccessKeyPolicyAsync(string accessKey, CancellationToken cancellationToken);
+
+    Task PutAccessKeyPolicyAsync(string accessKey, string policyJson, CancellationToken cancellationToken);
+
+    Task DeleteAccessKeyPolicyAsync(string accessKey, CancellationToken cancellationToken);
 
     Task AppendAuditAsync(AuditEntry entry, CancellationToken cancellationToken);
 

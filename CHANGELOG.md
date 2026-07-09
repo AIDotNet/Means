@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Added access-key-level IAM-style policy support for S3 authorization, Console management APIs, and console UI.
+- Documented access-key policy evaluation order and Principal optional semantics in the SDK contract.
+
 ## 0.1.2 - 2026-06-05
 
 - Bumped the C# and TypeScript SDK package versions to `0.1.2`.

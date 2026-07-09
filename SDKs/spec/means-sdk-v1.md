@@ -109,6 +109,29 @@ SDKs expose object tagging as a key/value map and support optional `versionId` f
 
 Bucket CORS and bucket notification are exposed as raw XML configuration methods in v1. The SDK validates the root element before sending, but it does not attempt to model every AWS XML variant.
 
+## Access Key Policy
+
+Means supports an access-key-scoped IAM-style policy subset in addition to bucket policy.
+
+Evaluation order for signed requests:
+
+1. SigV4 authentication
+2. Access-key policy (when `PolicyJson` is present)
+3. Bucket policy
+
+Compatibility:
+
+- Access keys without a policy keep the previous authenticated behavior and are only constrained by bucket policy.
+- Anonymous requests never evaluate access-key policy.
+
+Access-key policy notes:
+
+- Principal is optional. Missing Principal matches the current access key.
+- When Principal is present, it must match `*` or the current access key.
+- Deny wins over Allow inside the access-key policy document.
+- Service-level actions such as `s3:ListAllMyBuckets` match resource candidates `arn:aws:s3:::*` and `*`.
+- Official S3 SDKs do not expose Console access-key management APIs; policy attachment is a server/console concern.
+
 ## Error Model
 
 S3 XML errors are mapped into a typed SDK error with:

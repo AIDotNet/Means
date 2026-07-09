@@ -118,7 +118,8 @@
   "accessKeys": {
     "actions": {
       "create": "创建访问密钥",
-      "creating": "创建中..."
+      "creating": "创建中...",
+      "editPolicy": "编辑策略"
     },
     "deleteDialog": {
       "description": "删除访问密钥后，使用该密钥的 S3 请求将无法继续认证。",
@@ -127,7 +128,9 @@
     "errors": {
       "createFailed": "创建访问密钥失败",
       "deleteFailed": "删除访问密钥失败",
-      "loadFailed": "加载访问密钥失败"
+      "loadFailed": "加载访问密钥失败",
+      "policySaveFailed": "保存访问密钥策略失败",
+      "policyDeleteFailed": "删除访问密钥策略失败"
     },
     "form": {
       "customAccessKeyLabel": "自定义 Access Key（可选）",
@@ -142,7 +145,8 @@
       "columns": {
         "accessKey": "Access Key",
         "createdAt": "创建时间",
-        "status": "状态"
+        "status": "状态",
+        "policy": "策略"
       },
       "states": {
         "empty": "暂无访问密钥",
@@ -151,10 +155,20 @@
       "status": {
         "disabled": "已禁用",
         "enabled": "已启用"
+      },
+      "policy": {
+        "attached": "已绑定",
+        "none": "无"
       }
     },
     "toast": {
-      "deleted": "访问密钥已删除"
+      "deleted": "访问密钥已删除",
+      "policySaved": "访问密钥策略已保存",
+      "policyDeleted": "访问密钥策略已删除"
+    },
+    "policyDialog": {
+      "title": "访问密钥策略",
+      "description": "管理绑定到 {{accessKey}} 的 IAM 风格策略。"
     }
   },
   "audit": {
@@ -261,6 +275,13 @@
         "loadFailed": "加载生命周期设置失败",
         "saveFailed": "保存生命周期设置失败",
         "deleteFailed": "删除生命周期规则失败"
+      },
+      "templates": "模板",
+      "templateOptions": {
+        "expire30": "30 天后过期删除对象",
+        "expire90Abort7": "90 天过期 + 7 天中止未完成分片",
+        "noncurrent30": "30 天后清理非当前版本",
+        "prefixTempExpire7": "temp/ 前缀 7 天后过期"
       }
     }
   },
@@ -452,7 +473,9 @@
       "viewDetails": "查看详情",
       "batchDelete": "删除 ({{count}})",
       "selectAll": "全选",
-      "selectObject": "选择 {{objectKey}}"
+      "selectObject": "选择 {{objectKey}}",
+      "loadMore": "加载更多",
+      "loadingMore": "加载中..."
     },
     "copyDialog": {
       "description": "输入目标 Object Key，复制会保留对象内容和元数据。",
@@ -564,14 +587,27 @@
       "deletePolicy": "删除策略",
       "format": "格式化",
       "publicReadTemplate": "公开读取模板",
-      "savePolicy": "保存策略"
+      "savePolicy": "保存策略",
+      "scopedTemplate": "限定资源模板",
+      "templates": "模板"
     },
     "description": "编辑兼容 S3 bucket policy 的 JSON 文档。",
     "errors": {
       "invalidForFormat": "当前内容不是有效 JSON，无法格式化。",
       "invalidForSave": "策略不是有效 JSON，无法保存。"
     },
-    "title": "Bucket Policy"
+    "title": "Bucket Policy",
+    "accessKeyDescription": "编辑 Access Key 级策略 JSON。Principal 可选。",
+    "templates": {
+      "publicRead": "公开读取",
+      "publicReadAuthenticatedWrite": "公开列/读 + 指定密钥写",
+      "authenticatedReadWrite": "指定 Access Key 读写",
+      "denyDelete": "公开列/读，禁止删除",
+      "scopedAllow": "限定单桶读写",
+      "readOnly": "单桶只读",
+      "listBucketsOnly": "仅 ListBuckets",
+      "fullBucketAccess": "单桶完整权限"
+    }
   },
   "transfer": {
     "uploadConnectionFailed": "上传连接失败",

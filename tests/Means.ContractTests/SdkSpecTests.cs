@@ -81,6 +81,9 @@ public sealed class SdkSpecTests
         Assert.Contains("defaultSdkPartBytes: 16777216", yaml);
         Assert.Contains("deleteMarker: true", yaml);
         Assert.Contains("AbortIncompleteMultipartUpload.DaysAfterInitiation", yaml);
+        Assert.Contains("accessKeyPolicy:", yaml);
+        Assert.Contains("evaluationOrder:", yaml);
+        Assert.Contains("optional: true", yaml);
     }
 
     private static string FindRepoRoot()

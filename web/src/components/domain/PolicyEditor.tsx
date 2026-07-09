@@ -1,7 +1,13 @@
-import { useState } from "react"
-import { FileJsonIcon, WandSparklesIcon } from "lucide-react"
+﻿import { useState } from "react"
+import { ChevronDownIcon, FileJsonIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Textarea } from "@/components/ui/textarea"
 import { useTranslation } from "@/i18n"
 
@@ -11,19 +17,37 @@ const policyPlaceholder = `{
 }`
 
 type PolicyEditorProps = {
-  bucketName: string
   value: string
   onChange: (value: string) => void
   onSave: () => void | Promise<void>
   onDelete: () => void | Promise<void>
+  mode?: "bucket" | "accessKey"
+  bucketName?: string
+  title?: string
+  description?: string
+  compact?: boolean
 }
 
+type PolicyTemplateId =
+  | "publicRead"
+  | "publicReadAuthenticatedWrite"
+  | "denyDelete"
+  | "authenticatedReadWrite"
+  | "scopedAllow"
+  | "readOnly"
+  | "listBucketsOnly"
+  | "fullBucketAccess"
+
 export function PolicyEditor({
-  bucketName,
   value,
   onChange,
   onSave,
   onDelete,
+  mode = "bucket",
+  bucketName,
+  title,
+  description,
+  compact = false,
 }: PolicyEditorProps) {
   const { t } = useTranslation()
   const [error, setError] = useState<string | null>(null)
@@ -37,24 +61,8 @@ export function PolicyEditor({
     }
   }
 
-  const fillPublicRead = () => {
-    onChange(
-      JSON.stringify(
-        {
-          Version: "2012-10-17",
-          Statement: [
-            {
-              Effect: "Allow",
-              Principal: "*",
-              Action: "s3:GetObject",
-              Resource: `arn:aws:s3:::${bucketName}/*`,
-            },
-          ],
-        },
-        null,
-        2
-      )
-    )
+  const applyTemplate = (templateId: PolicyTemplateId) => {
+    onChange(JSON.stringify(buildPolicyTemplate(templateId, bucketName || "bucket"), null, 2))
     setError(null)
   }
 
@@ -68,23 +76,52 @@ export function PolicyEditor({
     }
   }
 
+  const templates =
+    mode === "accessKey"
+      ? ([
+          ["scopedAllow", t("policyEditor.templates.scopedAllow")],
+          ["readOnly", t("policyEditor.templates.readOnly")],
+          ["listBucketsOnly", t("policyEditor.templates.listBucketsOnly")],
+          ["fullBucketAccess", t("policyEditor.templates.fullBucketAccess")],
+        ] as const)
+      : ([
+          ["publicRead", t("policyEditor.templates.publicRead")],
+          ["publicReadAuthenticatedWrite", t("policyEditor.templates.publicReadAuthenticatedWrite")],
+          ["authenticatedReadWrite", t("policyEditor.templates.authenticatedReadWrite")],
+          ["denyDelete", t("policyEditor.templates.denyDelete")],
+        ] as const)
+
   return (
     <section className="rounded-lg border bg-card text-card-foreground shadow-xs">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
         <div>
           <div className="flex items-center gap-2 font-medium">
             <FileJsonIcon className="size-4 text-primary" />
-            {t("policyEditor.title")}
+            {title ?? t("policyEditor.title")}
           </div>
           <p className="mt-1 text-sm text-muted-foreground">
-            {t("policyEditor.description")}
+            {description ??
+              (mode === "accessKey"
+                ? t("policyEditor.accessKeyDescription")
+                : t("policyEditor.description"))}
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={fillPublicRead}>
-            <WandSparklesIcon />
-            {t("policyEditor.actions.publicReadTemplate")}
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm">
+                {t("policyEditor.actions.templates")}
+                <ChevronDownIcon />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {templates.map(([id, label]) => (
+                <DropdownMenuItem key={id} onClick={() => applyTemplate(id)}>
+                  {label}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button variant="outline" size="sm" onClick={format}>
             {t("policyEditor.actions.format")}
           </Button>
@@ -92,7 +129,7 @@ export function PolicyEditor({
       </div>
       <div className="p-4">
         <Textarea
-          className="min-h-80 font-mono text-xs"
+          className={`${compact ? "min-h-56" : "min-h-80"} font-mono text-xs`}
           placeholder={policyPlaceholder}
           value={value}
           onChange={(event) => onChange(event.target.value)}
@@ -107,4 +144,132 @@ export function PolicyEditor({
       </div>
     </section>
   )
+}
+
+function buildPolicyTemplate(templateId: PolicyTemplateId, bucketName: string) {
+  switch (templateId) {
+    case "publicRead":
+      return {
+        Version: "2012-10-17",
+        Statement: [
+          {
+            Effect: "Allow",
+            Principal: "*",
+            Action: "s3:GetObject",
+            Resource: `arn:aws:s3:::${bucketName}/*`,
+          },
+        ],
+      }
+    case "publicReadAuthenticatedWrite":
+      return {
+        Version: "2012-10-17",
+        Statement: [
+          {
+            Effect: "Allow",
+            Principal: "*",
+            Action: ["s3:ListBucket", "s3:GetObject"],
+            Resource: [`arn:aws:s3:::${bucketName}`, `arn:aws:s3:::${bucketName}/*`],
+          },
+          {
+            Effect: "Allow",
+            Principal: "YOUR_ACCESS_KEY",
+            Action: ["s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"],
+            Resource: `arn:aws:s3:::${bucketName}/*`,
+          },
+        ],
+      }
+    case "authenticatedReadWrite":
+      return {
+        Version: "2012-10-17",
+        Statement: [
+          {
+            Effect: "Allow",
+            Principal: "YOUR_ACCESS_KEY",
+            Action: ["s3:ListBucket", "s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+            Resource: [`arn:aws:s3:::${bucketName}`, `arn:aws:s3:::${bucketName}/*`],
+          },
+        ],
+      }
+    case "denyDelete":
+      return {
+        Version: "2012-10-17",
+        Statement: [
+          {
+            Effect: "Allow",
+            Principal: "*",
+            Action: ["s3:ListBucket", "s3:GetObject"],
+            Resource: [`arn:aws:s3:::${bucketName}`, `arn:aws:s3:::${bucketName}/*`],
+          },
+          {
+            Effect: "Deny",
+            Principal: "*",
+            Action: "s3:DeleteObject",
+            Resource: `arn:aws:s3:::${bucketName}/*`,
+          },
+        ],
+      }
+    case "scopedAllow":
+      return {
+        Version: "2012-10-17",
+        Statement: [
+          {
+            Effect: "Allow",
+            Action: ["s3:ListBucket", "s3:GetObject", "s3:PutObject"],
+            Resource: [
+              `arn:aws:s3:::${bucketName}`,
+              `arn:aws:s3:::${bucketName}/*`,
+            ],
+          },
+        ],
+      }
+    case "readOnly":
+      return {
+        Version: "2012-10-17",
+        Statement: [
+          {
+            Effect: "Allow",
+            Action: ["s3:ListBucket", "s3:GetObject"],
+            Resource: [
+              `arn:aws:s3:::${bucketName}`,
+              `arn:aws:s3:::${bucketName}/*`,
+            ],
+          },
+        ],
+      }
+    case "listBucketsOnly":
+      return {
+        Version: "2012-10-17",
+        Statement: [
+          {
+            Effect: "Allow",
+            Action: "s3:ListAllMyBuckets",
+            Resource: ["arn:aws:s3:::*", "*"],
+          },
+        ],
+      }
+    case "fullBucketAccess":
+      return {
+        Version: "2012-10-17",
+        Statement: [
+          {
+            Effect: "Allow",
+            Action: [
+              "s3:ListBucket",
+              "s3:GetObject",
+              "s3:PutObject",
+              "s3:DeleteObject",
+              "s3:GetObjectTagging",
+              "s3:PutObjectTagging",
+              "s3:DeleteObjectTagging",
+              "s3:AbortMultipartUpload",
+              "s3:ListMultipartUploadParts",
+            ],
+            Resource: [
+              `arn:aws:s3:::${bucketName}`,
+              `arn:aws:s3:::${bucketName}/*`,
+            ],
+          },
+        ],
+      }
+  }
 }

@@ -1,4 +1,4 @@
-import i18n from "@/i18n"
+﻿import i18n from "@/i18n"
 
 export type Session = {
   authenticated: boolean
@@ -428,6 +428,7 @@ export type AccessKeyInfo = {
   accessKey: string
   enabled: boolean
   createdAt: string
+  hasPolicy: boolean
 }
 
 export type AccessKeySecretResult = AccessKeyInfo & {
@@ -745,13 +746,26 @@ export const api = {
       }
     ),
   accessKeys: () => request<AccessKeyInfo[]>("/api/console/access-keys"),
-  createAccessKey: (accessKey?: string) =>
+  createAccessKey: (accessKey?: string, policy?: string) =>
     request<AccessKeySecretResult>("/api/console/access-keys", {
       method: "POST",
-      body: { accessKey: accessKey || null },
+      body: { accessKey: accessKey || null, policy: policy || null },
     }),
   deleteAccessKey: (accessKey: string) =>
     request<void>(`/api/console/access-keys/${encodeURIComponent(accessKey)}`, {
+      method: "DELETE",
+    }),
+  getAccessKeyPolicy: (accessKey: string) =>
+    request<PolicyResponse>(
+      `/api/console/access-keys/${encodeURIComponent(accessKey)}/policy`
+    ),
+  putAccessKeyPolicy: (accessKey: string, policy: string) =>
+    request<void>(`/api/console/access-keys/${encodeURIComponent(accessKey)}/policy`, {
+      method: "PUT",
+      body: { policy },
+    }),
+  deleteAccessKeyPolicy: (accessKey: string) =>
+    request<void>(`/api/console/access-keys/${encodeURIComponent(accessKey)}/policy`, {
       method: "DELETE",
     }),
   settings: () => request<SystemSettings>("/api/console/settings"),

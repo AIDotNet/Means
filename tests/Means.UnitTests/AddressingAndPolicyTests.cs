@@ -1,4 +1,4 @@
-using Means.Core;
+﻿using Means.Core;
 using Means.Protocol.S3;
 using Microsoft.AspNetCore.Http;
 
@@ -81,6 +81,176 @@ public sealed class AddressingAndPolicyTests
 
         var evaluator = new BucketPolicyEvaluator();
         var decision = evaluator.Evaluate(policy, S3Actions.GetObject, "public", "private/file.txt", principal: "meansadmin");
+
+        Assert.Equal(PolicyDecision.Deny, decision);
+    }
+
+    [Fact]
+    public void AccessKeyPolicyAllowsMissingPrincipal()
+    {
+        const string policy = """
+            {
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": "s3:GetObject",
+                  "Resource": "arn:aws:s3:::chats/*"
+                }
+              ]
+            }
+            """;
+
+        var evaluator = new BucketPolicyEvaluator();
+        var decision = evaluator.Evaluate(
+            policy,
+            S3Actions.GetObject,
+            "chats",
+            "thread-1.json",
+            principal: "scoped-key",
+            PolicyPrincipalMode.AccessKey);
+
+        Assert.Equal(PolicyDecision.Allow, decision);
+    }
+
+    [Fact]
+    public void AccessKeyPolicyGetObjectOnlyCannotPutObject()
+    {
+        const string policy = """
+            {
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": "s3:GetObject",
+                  "Resource": "arn:aws:s3:::chats/*"
+                }
+              ]
+            }
+            """;
+
+        var evaluator = new BucketPolicyEvaluator();
+        var decision = evaluator.Evaluate(
+            policy,
+            S3Actions.PutObject,
+            "chats",
+            "thread-1.json",
+            principal: "scoped-key",
+            PolicyPrincipalMode.AccessKey);
+
+        Assert.Equal(PolicyDecision.Neutral, decision);
+    }
+
+    [Fact]
+    public void AccessKeyPolicyResourceScopeBlocksOtherBuckets()
+    {
+        const string policy = """
+            {
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": "s3:*",
+                  "Resource": ["arn:aws:s3:::chats", "arn:aws:s3:::chats/*"]
+                }
+              ]
+            }
+            """;
+
+        var evaluator = new BucketPolicyEvaluator();
+        var decision = evaluator.Evaluate(
+            policy,
+            S3Actions.GetObject,
+            "other",
+            "file.txt",
+            principal: "scoped-key",
+            PolicyPrincipalMode.AccessKey);
+
+        Assert.Equal(PolicyDecision.Neutral, decision);
+    }
+
+    [Fact]
+    public void AccessKeyPolicyDenyWinsOverAllow()
+    {
+        const string policy = """
+            {
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": "s3:*",
+                  "Resource": "arn:aws:s3:::chats/*"
+                },
+                {
+                  "Effect": "Deny",
+                  "Action": "s3:DeleteObject",
+                  "Resource": "arn:aws:s3:::chats/*"
+                }
+              ]
+            }
+            """;
+
+        var evaluator = new BucketPolicyEvaluator();
+        var decision = evaluator.Evaluate(
+            policy,
+            S3Actions.DeleteObject,
+            "chats",
+            "thread-1.json",
+            principal: "scoped-key",
+            PolicyPrincipalMode.AccessKey);
+
+        Assert.Equal(PolicyDecision.Deny, decision);
+    }
+
+    [Fact]
+    public void EmptyAccessKeyPolicyIsNeutral()
+    {
+        var evaluator = new BucketPolicyEvaluator();
+        var decision = evaluator.Evaluate(
+            null,
+            S3Actions.GetObject,
+            "chats",
+            "thread-1.json",
+            principal: "scoped-key",
+            PolicyPrincipalMode.AccessKey);
+
+        Assert.Equal(PolicyDecision.Neutral, decision);
+    }
+
+    [Fact]
+    public void AccessKeyPolicyMatchesListAllMyBucketsResource()
+    {
+        const string policy = """
+            {
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": "s3:ListAllMyBuckets",
+                  "Resource": "arn:aws:s3:::*"
+                }
+              ]
+            }
+            """;
+
+        var evaluator = new BucketPolicyEvaluator();
+        var decision = evaluator.Evaluate(
+            policy,
+            S3Actions.ListAllMyBuckets,
+            bucketName: null,
+            key: null,
+            principal: "scoped-key",
+            PolicyPrincipalMode.AccessKey);
+
+        Assert.Equal(PolicyDecision.Allow, decision);
+    }
+
+    [Fact]
+    public void InvalidPolicyJsonIsDenied()
+    {
+        var evaluator = new BucketPolicyEvaluator();
+        var decision = evaluator.Evaluate(
+            "{not-json",
+            S3Actions.GetObject,
+            "chats",
+            "thread-1.json",
+            principal: "scoped-key",
+            PolicyPrincipalMode.AccessKey);
 
         Assert.Equal(PolicyDecision.Deny, decision);
     }

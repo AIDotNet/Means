@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState, type ComponentType } from "react"
+﻿import { useCallback, useEffect, useState, type ComponentType } from "react"
 import {
   ActivityIcon,
   CalendarClockIcon,
+  ChevronDownIcon,
   DatabaseIcon,
   FileJsonIcon,
   FolderTreeIcon,
@@ -21,6 +22,12 @@ import { PolicyEditor } from "@/components/domain/PolicyEditor"
 import { PageHeader } from "@/components/layout/PageHeader"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Separator } from "@/components/ui/separator"
 import {
@@ -385,6 +392,10 @@ function LifecycleEditor({ bucketName }: { bucketName: string }) {
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
 
+  const applyLifecycleTemplate = (templateId: LifecycleTemplateId) => {
+    setRulesText(JSON.stringify(buildLifecycleTemplate(templateId), null, 2))
+  }
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
@@ -489,9 +500,33 @@ function LifecycleEditor({ bucketName }: { bucketName: string }) {
                 {t("bucketDetail.lifecycle.rulesDescription")}
               </p>
             </div>
-            <Badge variant="outline">
-              {t("bucketDetail.lifecycle.ruleCount", { count: lifecycle?.rules.length ?? 0 })}
-            </Badge>
+            <div className="flex items-center gap-2">
+              <Badge variant="outline">
+                {t("bucketDetail.lifecycle.ruleCount", { count: lifecycle?.rules.length ?? 0 })}
+              </Badge>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm">
+                    {t("bucketDetail.lifecycle.templates")}
+                    <ChevronDownIcon />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={() => applyLifecycleTemplate("expire30")}>
+                    {t("bucketDetail.lifecycle.templateOptions.expire30")}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => applyLifecycleTemplate("expire90Abort7")}>
+                    {t("bucketDetail.lifecycle.templateOptions.expire90Abort7")}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => applyLifecycleTemplate("noncurrent30")}>
+                    {t("bucketDetail.lifecycle.templateOptions.noncurrent30")}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => applyLifecycleTemplate("prefixTempExpire7")}>
+                    {t("bucketDetail.lifecycle.templateOptions.prefixTempExpire7")}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
           </div>
           <Separator className="my-5" />
           <Textarea
@@ -548,6 +583,57 @@ function BucketMetricStrip({
       <MiniMetric label={t("bucketDetail.metrics.defaultHeaders")} value={`${headerCount + metadataCount}`} />
     </section>
   )
+}
+
+type LifecycleTemplateId = "expire30" | "expire90Abort7" | "noncurrent30" | "prefixTempExpire7"
+
+function buildLifecycleTemplate(templateId: LifecycleTemplateId): LifecycleRule[] {
+  switch (templateId) {
+    case "expire30":
+      return [
+        {
+          id: "expire-after-30-days",
+          status: "Enabled",
+          prefix: "",
+          expirationDays: 30,
+          noncurrentVersionExpirationDays: null,
+          abortIncompleteMultipartUploadDays: null,
+        },
+      ]
+    case "expire90Abort7":
+      return [
+        {
+          id: "expire-after-90-days",
+          status: "Enabled",
+          prefix: "",
+          expirationDays: 90,
+          noncurrentVersionExpirationDays: null,
+          abortIncompleteMultipartUploadDays: 7,
+        },
+      ]
+    case "noncurrent30":
+      return [
+        {
+          id: "cleanup-noncurrent-versions",
+          status: "Enabled",
+          prefix: "",
+          expirationDays: null,
+          noncurrentVersionExpirationDays: 30,
+          abortIncompleteMultipartUploadDays: 7,
+        },
+      ]
+    case "prefixTempExpire7":
+      return [
+        {
+          id: "expire-temp-prefix",
+          status: "Enabled",
+          prefix: "temp/",
+          expirationDays: 7,
+          noncurrentVersionExpirationDays: null,
+          abortIncompleteMultipartUploadDays: 1,
+        },
+      ]
+  }
 }
 
 function normalizeLifecycleRules(value: unknown): LifecycleRule[] {

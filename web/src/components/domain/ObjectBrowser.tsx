@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react"
+﻿import { useCallback, useEffect, useState } from "react"
 import {
   CopyIcon,
   DownloadIcon,
@@ -66,9 +66,13 @@ export function ObjectBrowser({ bucketName }: ObjectBrowserProps) {
   const { t } = useTranslation()
   const [prefix, setPrefix] = useState("")
   const [query, setQuery] = useState("")
-  const [result, setResult] = useState<ListObjectsResult | null>(null)
+  const [objects, setObjects] = useState<ListedObject[]>([])
+  const [prefixes, setPrefixes] = useState<string[]>([])
+  const [continuationToken, setContinuationToken] = useState<string | null>(null)
+  const [isTruncated, setIsTruncated] = useState(false)
   const [selected, setSelected] = useState<ObjectInfo | null>(null)
   const [loading, setLoading] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [uploadOpen, setUploadOpen] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [progress, setProgress] = useState(0)
@@ -79,6 +83,13 @@ export function ObjectBrowser({ bucketName }: ObjectBrowserProps) {
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false)
   const [batchDeleting, setBatchDeleting] = useState(false)
 
+  const applyPage = useCallback((page: ListObjectsResult, append: boolean) => {
+    setObjects((current) => (append ? mergeObjects(current, page.objects) : page.objects))
+    setPrefixes((current) => (append ? mergePrefixes(current, page.commonPrefixes) : page.commonPrefixes))
+    setContinuationToken(page.nextContinuationToken)
+    setIsTruncated(page.isTruncated)
+  }, [])
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
@@ -86,22 +97,45 @@ export function ObjectBrowser({ bucketName }: ObjectBrowserProps) {
       params.set("prefix", prefix)
       params.set("delimiter", "/")
       params.set("maxKeys", "1000")
-      setResult(await api.objects(bucketName, params))
+      const page = await api.objects(bucketName, params)
+      applyPage(page, false)
+      setSelectedKeys(new Set())
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("objectBrowser.errors.loadFailed"))
     } finally {
       setLoading(false)
     }
-  }, [bucketName, prefix, t])
+  }, [applyPage, bucketName, prefix, t])
+
+  const loadMore = useCallback(async () => {
+    if (!isTruncated || !continuationToken || loadingMore) {
+      return
+    }
+
+    setLoadingMore(true)
+    try {
+      const params = new URLSearchParams()
+      params.set("prefix", prefix)
+      params.set("delimiter", "/")
+      params.set("maxKeys", "1000")
+      params.set("continuationToken", continuationToken)
+      const page = await api.objects(bucketName, params)
+      applyPage(page, true)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("objectBrowser.errors.loadFailed"))
+    } finally {
+      setLoadingMore(false)
+    }
+  }, [applyPage, bucketName, continuationToken, isTruncated, loadingMore, prefix, t])
 
   useEffect(() => {
     void load()
   }, [load])
 
-  const objects = (result?.objects ?? []).filter((object) =>
+  const visibleObjects = objects.filter((object) =>
     object.key.toLowerCase().includes(query.toLowerCase())
   )
-  const prefixes = (result?.commonPrefixes ?? []).filter((nextPrefix) =>
+  const visiblePrefixes = prefixes.filter((nextPrefix) =>
     nextPrefix.toLowerCase().includes(query.toLowerCase())
   )
 
@@ -198,10 +232,10 @@ export function ObjectBrowser({ bucketName }: ObjectBrowserProps) {
   }
 
   const toggleAll = () => {
-    if (objects.length > 0 && selectedKeys.size === objects.length) {
+    if (visibleObjects.length > 0 && selectedKeys.size === visibleObjects.length) {
       setSelectedKeys(new Set())
     } else {
-      setSelectedKeys(new Set(objects.map((object) => object.key)))
+      setSelectedKeys(new Set(visibleObjects.map((object) => object.key)))
     }
   }
 
@@ -278,7 +312,7 @@ export function ObjectBrowser({ bucketName }: ObjectBrowserProps) {
             <TableHead className="w-10">
               {objects.length > 0 ? (
                 <Checkbox
-                  checked={objects.length > 0 && selectedKeys.size === objects.length}
+                  checked={visibleObjects.length > 0 && selectedKeys.size === visibleObjects.length}
                   onCheckedChange={toggleAll}
                   aria-label={t("objectBrowser.actions.selectAll")}
                 />
@@ -292,7 +326,7 @@ export function ObjectBrowser({ bucketName }: ObjectBrowserProps) {
           </TableRow>
         </TableHeader>
         <TableBody>
-          {prefixes.map((nextPrefix) => (
+          {visiblePrefixes.map((nextPrefix) => (
             <TableRow key={nextPrefix}>
               <TableCell />
               <TableCell>
@@ -312,7 +346,7 @@ export function ObjectBrowser({ bucketName }: ObjectBrowserProps) {
               <TableCell />
             </TableRow>
           ))}
-          {objects.map((object) => (
+          {visibleObjects.map((object) => (
             <TableRow key={object.key}>
               <TableCell>
                 <Checkbox
@@ -350,14 +384,14 @@ export function ObjectBrowser({ bucketName }: ObjectBrowserProps) {
               </TableCell>
             </TableRow>
           ))}
-          {loading && prefixes.length + objects.length === 0 ? (
+          {loading && visiblePrefixes.length + visibleObjects.length === 0 ? (
             <TableRow>
               <TableCell colSpan={6} className="h-32 text-center text-muted-foreground">
                 {t("objectBrowser.table.states.loading")}
               </TableCell>
             </TableRow>
           ) : null}
-          {!loading && prefixes.length + objects.length === 0 ? (
+          {!loading && visiblePrefixes.length + visibleObjects.length === 0 ? (
             <TableRow>
               <TableCell colSpan={6} className="h-32 text-center text-muted-foreground">
                 {t("objectBrowser.table.states.empty")}
@@ -366,6 +400,14 @@ export function ObjectBrowser({ bucketName }: ObjectBrowserProps) {
           ) : null}
         </TableBody>
       </Table>
+      {isTruncated ? (
+        <div className="flex justify-center border-t p-3">
+          <Button variant="outline" onClick={() => void loadMore()} disabled={loadingMore}>
+            <RefreshCwIcon className={loadingMore ? "animate-spin" : ""} />
+            {loadingMore ? t("objectBrowser.actions.loadingMore") : t("objectBrowser.actions.loadMore")}
+          </Button>
+        </div>
+      ) : null}
 
       <UploadDialog
         open={uploadOpen}
@@ -579,4 +621,28 @@ function parentPrefix(value: string) {
   const parts = value.split("/").filter(Boolean)
   parts.pop()
   return parts.length > 0 ? `${parts.join("/")}/` : ""
+}
+
+function mergeObjects(current: ListedObject[], incoming: ListedObject[]) {
+  const seen = new Set(current.map((object) => object.key))
+  const merged = [...current]
+  for (const object of incoming) {
+    if (!seen.has(object.key)) {
+      merged.push(object)
+      seen.add(object.key)
+    }
+  }
+  return merged
+}
+
+function mergePrefixes(current: string[], incoming: string[]) {
+  const seen = new Set(current)
+  const merged = [...current]
+  for (const value of incoming) {
+    if (!seen.has(value)) {
+      merged.push(value)
+      seen.add(value)
+    }
+  }
+  return merged
 }

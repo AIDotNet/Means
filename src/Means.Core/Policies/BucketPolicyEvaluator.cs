@@ -1,9 +1,9 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 
 namespace Means.Core;
 
 /// <summary>
-/// Evaluates the v1 AWS-style bucket policy subset.
+/// Evaluates the v1 AWS-style policy subset for bucket and access-key policies.
 /// The evaluator intentionally supports only the actions/resources in the public SDK contract,
 /// while preserving the familiar Statement/Effect/Principal/Action/Resource shape.
 /// </summary>
@@ -11,50 +11,74 @@ public sealed class BucketPolicyEvaluator
 {
     public PolicyDecision Evaluate(string? policyJson, string action, string bucketName, string? key, string? principal)
     {
+        return Evaluate(policyJson, action, bucketName, key, principal, PolicyPrincipalMode.Bucket);
+    }
+
+    public PolicyDecision Evaluate(
+        string? policyJson,
+        string action,
+        string? bucketName,
+        string? key,
+        string? principal,
+        PolicyPrincipalMode principalMode)
+    {
         if (string.IsNullOrWhiteSpace(policyJson))
         {
             return PolicyDecision.Neutral;
         }
 
-        using var document = JsonDocument.Parse(policyJson);
-        if (!document.RootElement.TryGetProperty("Statement", out var statements))
+        try
         {
-            return PolicyDecision.Neutral;
-        }
+            using var document = JsonDocument.Parse(policyJson);
+            if (!document.RootElement.TryGetProperty("Statement", out var statements))
+            {
+                return PolicyDecision.Neutral;
+            }
 
-        if (statements.ValueKind == JsonValueKind.Object)
-        {
-            return EvaluateStatement(statements, action, bucketName, key, principal);
-        }
+            if (statements.ValueKind == JsonValueKind.Object)
+            {
+                return EvaluateStatement(statements, action, bucketName, key, principal, principalMode);
+            }
 
-        var decision = PolicyDecision.Neutral;
-        if (statements.ValueKind != JsonValueKind.Array)
-        {
+            var decision = PolicyDecision.Neutral;
+            if (statements.ValueKind != JsonValueKind.Array)
+            {
+                return decision;
+            }
+
+            foreach (var statement in statements.EnumerateArray())
+            {
+                var statementDecision = EvaluateStatement(statement, action, bucketName, key, principal, principalMode);
+                if (statementDecision == PolicyDecision.Deny)
+                {
+                    return PolicyDecision.Deny;
+                }
+
+                if (statementDecision == PolicyDecision.Allow)
+                {
+                    decision = PolicyDecision.Allow;
+                }
+            }
+
             return decision;
         }
-
-        foreach (var statement in statements.EnumerateArray())
+        catch (JsonException)
         {
-            var statementDecision = EvaluateStatement(statement, action, bucketName, key, principal);
-            if (statementDecision == PolicyDecision.Deny)
-            {
-                return PolicyDecision.Deny;
-            }
-
-            if (statementDecision == PolicyDecision.Allow)
-            {
-                decision = PolicyDecision.Allow;
-            }
+            return PolicyDecision.Deny;
         }
-
-        return decision;
     }
 
-    private static PolicyDecision EvaluateStatement(JsonElement statement, string action, string bucketName, string? key, string? principal)
+    private static PolicyDecision EvaluateStatement(
+        JsonElement statement,
+        string action,
+        string? bucketName,
+        string? key,
+        string? principal,
+        PolicyPrincipalMode principalMode)
     {
         if (!MatchesEffect(statement, out var effect)
             || !MatchesAction(statement, action)
-            || !MatchesPrincipal(statement, principal)
+            || !MatchesPrincipal(statement, principal, principalMode)
             || !MatchesResource(statement, bucketName, key))
         {
             return PolicyDecision.Neutral;
@@ -84,11 +108,11 @@ public sealed class BucketPolicyEvaluator
             && EnumerateStrings(actions).Any(pattern => WildcardMatches(pattern, action));
     }
 
-    private static bool MatchesPrincipal(JsonElement statement, string? principal)
+    private static bool MatchesPrincipal(JsonElement statement, string? principal, PolicyPrincipalMode principalMode)
     {
         if (!statement.TryGetProperty("Principal", out var principalElement))
         {
-            return false;
+            return principalMode == PolicyPrincipalMode.AccessKey;
         }
 
         if (principalElement.ValueKind == JsonValueKind.String)
@@ -105,20 +129,30 @@ public sealed class BucketPolicyEvaluator
         return false;
     }
 
-    private static bool MatchesResource(JsonElement statement, string bucketName, string? key)
+    private static bool MatchesResource(JsonElement statement, string? bucketName, string? key)
     {
         if (!statement.TryGetProperty("Resource", out var resources))
         {
             return false;
         }
 
-        var objectResource = key is null
-            ? $"arn:aws:s3:::{bucketName}"
-            : $"arn:aws:s3:::{bucketName}/{key}";
-        var compactResource = key is null ? bucketName : $"{bucketName}/{key}";
+        string[] candidates;
+        if (string.IsNullOrEmpty(bucketName))
+        {
+            // Service-level actions such as s3:ListAllMyBuckets.
+            candidates = ["arn:aws:s3:::*", "*"];
+        }
+        else if (key is null)
+        {
+            candidates = [$"arn:aws:s3:::{bucketName}", bucketName];
+        }
+        else
+        {
+            candidates = [$"arn:aws:s3:::{bucketName}/{key}", $"{bucketName}/{key}"];
+        }
 
         return EnumerateStrings(resources).Any(resource =>
-            WildcardMatches(resource, objectResource) || WildcardMatches(resource, compactResource));
+            candidates.Any(candidate => WildcardMatches(resource, candidate)));
     }
 
     private static IEnumerable<string> EnumerateStrings(JsonElement element)

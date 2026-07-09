@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using System.Text.Json;
 using Means.Core;
 
@@ -57,38 +57,73 @@ public sealed partial class XlFsStore
         var maxKeys = Math.Clamp(options.MaxKeys, 1, 1000);
         var prefix = options.Prefix ?? string.Empty;
         var dbPrefix = Keys.CurrentObjectPrefix(bucketName) + Escape(prefix);
-        var rows = await Db.ScanPrefixAsync(dbPrefix, maxKeys + 1, DecodeToken(options.ContinuationToken), cancellationToken);
         var objects = new List<ListedObject>();
         var commonPrefixes = new SortedSet<string>(StringComparer.Ordinal);
+        string? afterKey = DecodeToken(options.ContinuationToken);
         string? nextToken = null;
-        string? lastScannedKey = DecodeToken(options.ContinuationToken);
-        foreach (var row in rows)
+        // Delimiter listings collapse many object keys into one CommonPrefix. Scan in batches and
+        // skip past each collapsed prefix so a large folder cannot hide sibling folders.
+        const int scanBatchSize = 256;
+
+        while (objects.Count + commonPrefixes.Count < maxKeys)
         {
-            if (objects.Count + commonPrefixes.Count >= maxKeys)
+            var rows = await Db.ScanPrefixAsync(dbPrefix, scanBatchSize, afterKey, cancellationToken);
+            if (rows.Count == 0)
             {
-                nextToken = lastScannedKey is null ? null : EncodeToken(lastScannedKey);
                 break;
             }
 
-            lastScannedKey = row.Key;
-            var record = Deserialize<XlObjectRecord>(row.Value);
-            if (record.IsDeleteMarker)
+            var advancedPastCommonPrefix = false;
+            foreach (var row in rows)
             {
-                continue;
-            }
-
-            if (!string.IsNullOrEmpty(options.Delimiter))
-            {
-                var rest = record.Key.Length >= prefix.Length ? record.Key[prefix.Length..] : record.Key;
-                var delimiterIndex = rest.IndexOf(options.Delimiter, StringComparison.Ordinal);
-                if (delimiterIndex >= 0)
+                if (objects.Count + commonPrefixes.Count >= maxKeys)
                 {
-                    commonPrefixes.Add(prefix + rest[..(delimiterIndex + options.Delimiter.Length)]);
+                    nextToken = afterKey is null ? null : EncodeToken(afterKey);
+                    advancedPastCommonPrefix = true;
+                    break;
+                }
+
+                var record = Deserialize<XlObjectRecord>(row.Value);
+                if (record.IsDeleteMarker)
+                {
+                    afterKey = row.Key;
                     continue;
                 }
+
+                if (!string.IsNullOrEmpty(options.Delimiter))
+                {
+                    var rest = record.Key.Length >= prefix.Length ? record.Key[prefix.Length..] : record.Key;
+                    var delimiterIndex = rest.IndexOf(options.Delimiter, StringComparison.Ordinal);
+                    if (delimiterIndex >= 0)
+                    {
+                        var commonPrefix = prefix + rest[..(delimiterIndex + options.Delimiter.Length)];
+                        commonPrefixes.Add(commonPrefix);
+                        // Jump past every remaining object key under this common prefix.
+                        afterKey = CommonPrefixExclusiveUpperBound(bucketName, commonPrefix);
+                        advancedPastCommonPrefix = true;
+                        break;
+                    }
+                }
+
+                objects.Add(new ListedObject(record.Key, record.ETag, record.ContentLength, record.LastModified, record.ContentType));
+                afterKey = row.Key;
             }
 
-            objects.Add(new ListedObject(record.Key, record.ETag, record.ContentLength, record.LastModified, record.ContentType));
+            if (objects.Count + commonPrefixes.Count >= maxKeys)
+            {
+                var peek = await Db.ScanPrefixAsync(dbPrefix, 1, afterKey, cancellationToken);
+                if (peek.Count > 0)
+                {
+                    nextToken = afterKey is null ? null : EncodeToken(afterKey);
+                }
+
+                break;
+            }
+
+            if (!advancedPastCommonPrefix && rows.Count < scanBatchSize)
+            {
+                break;
+            }
         }
 
         return new ListObjectsResult(
@@ -100,6 +135,13 @@ public sealed partial class XlFsStore
             nextToken,
             objects,
             commonPrefixes.ToArray());
+    }
+
+    private static string CommonPrefixExclusiveUpperBound(string bucketName, string commonPrefix)
+    {
+        // Hex encoding preserves lexicographic order, so appending U+FFFF yields an exclusive upper bound
+        // for every object key that starts with the common prefix.
+        return Keys.CurrentObjectPrefix(bucketName) + Escape(commonPrefix) + '\uffff';
     }
 
     public async Task<ListObjectVersionsResult> ListObjectVersionsAsync(

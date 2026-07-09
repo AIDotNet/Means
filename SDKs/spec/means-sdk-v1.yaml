@@ -377,6 +377,46 @@ bucketPolicy:
       Resource:
         - "arn:aws:s3:::bucket"
         - "arn:aws:s3:::bucket/*"
+accessKeyPolicy:
+  compatibility:
+    missingPolicy: unchanged-authenticated-behavior
+  evaluationOrder:
+    - sigv4
+    - accessKeyPolicy
+    - bucketPolicy
+  principal:
+    optional: true
+    match:
+      - "*"
+      - current-access-key
+  serviceLevelResources:
+    - "arn:aws:s3:::*"
+    - "*"
+  jsonShape:
+    Version: optional
+    Statement:
+      Effect: Allow|Deny
+      Principal: optional|"*"|access-key|{"AWS":"access-key"}
+      Action:
+        - s3:ListAllMyBuckets
+        - s3:ListBucket
+        - s3:GetObject
+        - s3:PutObject
+        - s3:DeleteObject
+        - s3:GetObjectTagging
+        - s3:PutObjectTagging
+        - s3:DeleteObjectTagging
+        - s3:GetBucketCORS
+        - s3:PutBucketCORS
+        - s3:GetBucketNotification
+        - s3:PutBucketNotification
+        - s3:AbortMultipartUpload
+        - s3:ListMultipartUploadParts
+      Resource:
+        - "arn:aws:s3:::*"
+        - "arn:aws:s3:::bucket"
+        - "arn:aws:s3:::bucket/*"
+        - "*"
 compression:
   encodings:
     - br

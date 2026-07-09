@@ -1,11 +1,11 @@
-using Means.Core;
+﻿using Means.Core;
 using Means.Protocol.S3;
 
 namespace Means.Endpoints.S3;
 
 /// <summary>
-/// Coordinates SigV4 authentication and bucket policy authorization for one S3 request.
-/// This class is deliberately HTTP-aware, while policy parsing and credential storage remain in lower layers.
+/// Coordinates SigV4 authentication and policy authorization for one S3 request.
+/// Order: SigV4 → access-key policy → bucket policy.
 /// </summary>
 internal sealed class S3RequestAuthorizer(
     IAccessKeyStore accessKeys,
@@ -25,6 +25,25 @@ internal sealed class S3RequestAuthorizer(
         if (auth.IsSigned && !auth.IsAuthenticated)
         {
             throw new MeansException(auth.ErrorCode ?? MeansErrorCodes.AccessDenied, auth.ErrorMessage ?? "Access denied.", 403);
+        }
+
+        if (auth.IsAuthenticated && !string.IsNullOrEmpty(auth.AccessKey))
+        {
+            var credential = await accessKeys.GetCredentialAsync(auth.AccessKey, cancellationToken);
+            if (!string.IsNullOrWhiteSpace(credential?.PolicyJson))
+            {
+                var accessKeyDecision = policyEvaluator.Evaluate(
+                    credential.PolicyJson,
+                    action,
+                    bucketName,
+                    key,
+                    auth.AccessKey,
+                    PolicyPrincipalMode.AccessKey);
+                if (accessKeyDecision != PolicyDecision.Allow)
+                {
+                    throw new MeansException(MeansErrorCodes.AccessDenied, "Access denied by access key policy.", 403);
+                }
+            }
         }
 
         if (bucketName is null)

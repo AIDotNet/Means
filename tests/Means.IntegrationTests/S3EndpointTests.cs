@@ -1,6 +1,8 @@
-using System.Net;
+﻿using System.Net;
+using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Means.Protocol.S3;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
@@ -530,6 +532,143 @@ public sealed class S3EndpointTests
         var getNotification = await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/controls?notification"), credentials);
         Assert.Equal(HttpStatusCode.OK, getNotification.StatusCode);
         Assert.Contains("<Topic>arn:means:topic</Topic>", await getNotification.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task AccessKeyPolicyRestrictsSignedRequestsAndLeavesAnonymousBucketPolicyIntact()
+    {
+        await using var factory = new MeansWebApplicationFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://api.means.local")
+        });
+
+        var admin = new SigV4SigningCredentials("meansadmin", "meansadminsecret");
+        await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/chats"), admin);
+        await SendSignedAsync(client, new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/other"), admin);
+
+        const string publicReadPolicy = """
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": "*",
+                  "Action": "s3:GetObject",
+                  "Resource": "arn:aws:s3:::chats/*"
+                }
+              ]
+            }
+            """;
+        var putBucketPolicy = new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/chats?policy")
+        {
+            Content = new StringContent(publicReadPolicy, Encoding.UTF8, "application/json")
+        };
+        Assert.Equal(HttpStatusCode.NoContent, (await SendSignedAsync(client, putBucketPolicy, admin)).StatusCode);
+
+        const string accessKeyPolicy = """
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": ["s3:ListBucket", "s3:GetObject", "s3:PutObject"],
+                  "Resource": ["arn:aws:s3:::chats", "arn:aws:s3:::chats/*"]
+                }
+              ]
+            }
+            """;
+
+        using var consoleClient = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost"),
+            HandleCookies = true
+        });
+        var login = await consoleClient.PostAsJsonAsync(
+            "/api/console/auth/login",
+            new { userName = "admin", password = "meansadmin" });
+        Assert.Equal(HttpStatusCode.OK, login.StatusCode);
+
+        var createKey = await consoleClient.PostAsJsonAsync(
+            "/api/console/access-keys",
+            new { accessKey = "scoped-key", policy = accessKeyPolicy });
+        Assert.Equal(HttpStatusCode.Created, createKey.StatusCode);
+        using var createDocument = JsonDocument.Parse(await createKey.Content.ReadAsStringAsync());
+        var secretKey = createDocument.RootElement.GetProperty("secretKey").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(secretKey));
+        Assert.True(createDocument.RootElement.GetProperty("hasPolicy").GetBoolean());
+
+        var scoped = new SigV4SigningCredentials("scoped-key", secretKey!);
+        var allowedPut = new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/chats/thread-1.json")
+        {
+            Content = new StringContent("{\"ok\":true}", Encoding.UTF8, "application/json")
+        };
+        Assert.Equal(HttpStatusCode.OK, (await SendSignedAsync(client, allowedPut, scoped)).StatusCode);
+
+        var deniedOtherBucket = new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/other/file.txt")
+        {
+            Content = new StringContent("nope", Encoding.UTF8, "text/plain")
+        };
+        var deniedOtherResponse = await SendSignedAsync(client, deniedOtherBucket, scoped);
+        Assert.Equal(HttpStatusCode.Forbidden, deniedOtherResponse.StatusCode);
+        Assert.Contains("<Code>AccessDenied</Code>", await deniedOtherResponse.Content.ReadAsStringAsync());
+
+        var deniedDelete = new HttpRequestMessage(HttpMethod.Delete, "https://api.means.local/chats/thread-1.json");
+        var deniedDeleteResponse = await SendSignedAsync(client, deniedDelete, scoped);
+        Assert.Equal(HttpStatusCode.Forbidden, deniedDeleteResponse.StatusCode);
+
+        var unrestrictedCreate = await consoleClient.PostAsJsonAsync(
+            "/api/console/access-keys",
+            new { accessKey = "open-key" });
+        Assert.Equal(HttpStatusCode.Created, unrestrictedCreate.StatusCode);
+        using var openDocument = JsonDocument.Parse(await unrestrictedCreate.Content.ReadAsStringAsync());
+        var openSecret = openDocument.RootElement.GetProperty("secretKey").GetString();
+        Assert.False(openDocument.RootElement.GetProperty("hasPolicy").GetBoolean());
+        var open = new SigV4SigningCredentials("open-key", openSecret!);
+        var openPut = new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/other/open.txt")
+        {
+            Content = new StringContent("open", Encoding.UTF8, "text/plain")
+        };
+        Assert.Equal(HttpStatusCode.OK, (await SendSignedAsync(client, openPut, open)).StatusCode);
+
+        const string bucketDenyPolicy = """
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": "*",
+                  "Action": "s3:GetObject",
+                  "Resource": "arn:aws:s3:::chats/*"
+                },
+                {
+                  "Effect": "Deny",
+                  "Principal": "*",
+                  "Action": "s3:GetObject",
+                  "Resource": "arn:aws:s3:::chats/secret/*"
+                }
+              ]
+            }
+            """;
+        var replaceBucketPolicy = new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/chats?policy")
+        {
+            Content = new StringContent(bucketDenyPolicy, Encoding.UTF8, "application/json")
+        };
+        Assert.Equal(HttpStatusCode.NoContent, (await SendSignedAsync(client, replaceBucketPolicy, admin)).StatusCode);
+
+        var secretPut = new HttpRequestMessage(HttpMethod.Put, "https://api.means.local/chats/secret/hidden.txt")
+        {
+            Content = new StringContent("hidden", Encoding.UTF8, "text/plain")
+        };
+        Assert.Equal(HttpStatusCode.OK, (await SendSignedAsync(client, secretPut, admin)).StatusCode);
+
+        var secretGet = new HttpRequestMessage(HttpMethod.Get, "https://api.means.local/chats/secret/hidden.txt");
+        var secretGetResponse = await SendSignedAsync(client, secretGet, scoped);
+        Assert.Equal(HttpStatusCode.Forbidden, secretGetResponse.StatusCode);
+        Assert.Contains("bucket policy", await secretGetResponse.Content.ReadAsStringAsync());
+
+        var anonymousAllowed = await client.GetAsync("https://api.means.local/chats/thread-1.json");
+        Assert.Equal(HttpStatusCode.OK, anonymousAllowed.StatusCode);
     }
 
     private static async Task<HttpResponseMessage> SendSignedAsync(HttpClient client, HttpRequestMessage request, SigV4SigningCredentials credentials)

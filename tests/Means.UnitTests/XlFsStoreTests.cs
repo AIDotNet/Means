@@ -1,4 +1,4 @@
-using System.Buffers.Binary;
+﻿using System.Buffers.Binary;
 using System.Text;
 using System.Text.Json;
 using Means.Core;
@@ -47,7 +47,8 @@ public sealed class XlFsStoreTests
             var walPath = Path.Combine(root, "current.wal");
             await File.WriteAllBytesAsync(walPath, [], CancellationToken.None);
 
-            await using var lockStream = new FileStream(walPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            // Match MeansLogDb's exclusive writer share mode so this fails on both Windows and Unix.
+            await using var lockStream = new FileStream(walPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
 
             var ex = await Assert.ThrowsAsync<IOException>(() => MeansLogDb.OpenAsync(root, CancellationToken.None));
 
@@ -159,6 +160,61 @@ public sealed class XlFsStoreTests
             Assert.Equal(XlMetaSyncModes.Batch, stats.SyncMode);
             Assert.Equal(2, stats.KeyCount);
             Assert.True(stats.WalBytes > 0);
+        }
+        finally
+        {
+            DeleteTempRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task ListObjectsWithDelimiterReturnsSiblingPrefixesEvenWhenOneFolderIsLarge()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            await using var store = CreateStore(root);
+            await store.CreateBucketAsync("photos", CancellationToken.None);
+
+            // One large common prefix must not exhaust MaxKeys and hide sibling folders.
+            for (var i = 0; i < 40; i++)
+            {
+                await store.PutObjectAsync(new PutObjectRequest(
+                    "photos",
+                    $"2026/01/file-{i:D3}.txt",
+                    new MemoryStream(Encoding.UTF8.GetBytes("a")),
+                    "text/plain",
+                    new Dictionary<string, string>(),
+                    null,
+                    null), CancellationToken.None);
+            }
+
+            await store.PutObjectAsync(new PutObjectRequest(
+                "photos",
+                "2026/02/file.txt",
+                new MemoryStream(Encoding.UTF8.GetBytes("b")),
+                "text/plain",
+                new Dictionary<string, string>(),
+                null,
+                null), CancellationToken.None);
+            await store.PutObjectAsync(new PutObjectRequest(
+                "photos",
+                "2026/root.txt",
+                new MemoryStream(Encoding.UTF8.GetBytes("c")),
+                "text/plain",
+                new Dictionary<string, string>(),
+                null,
+                null), CancellationToken.None);
+
+            var list = await store.ListObjectsAsync(
+                "photos",
+                new ListObjectsOptions("2026/", "/", null, 10),
+                CancellationToken.None);
+
+            Assert.Equal(["2026/01/", "2026/02/"], list.CommonPrefixes.ToArray());
+            Assert.Single(list.Objects);
+            Assert.Equal("2026/root.txt", list.Objects[0].Key);
+            Assert.False(list.IsTruncated);
         }
         finally
         {
