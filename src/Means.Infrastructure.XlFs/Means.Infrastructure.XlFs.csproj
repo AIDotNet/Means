@@ -15,4 +15,8 @@
     <ProjectReference Include="..\Means.Core\Means.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Means.UnitTests" />
+  </ItemGroup>
+
 </Project>

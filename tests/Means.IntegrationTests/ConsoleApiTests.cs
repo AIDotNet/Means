@@ -38,6 +38,29 @@ public sealed class ConsoleApiTests
     }
 
     [Fact]
+    public async Task ClusterTopologyIgnoresBlankDiskOverrides()
+    {
+        await using var factory = new MeansWebApplicationFactory(new Dictionary<string, string?>
+        {
+            ["Means:Storage:Disks:2"] = "",
+            ["Means:Storage:Disks:3"] = ""
+        });
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost")
+        });
+
+        var store = factory.Services.GetRequiredService<IClusterStore>();
+        var topology = await WaitForRegisteredNodeAsync(store);
+
+        var node = Assert.Single(topology.Nodes);
+        Assert.Equal(["disk-00", "disk-01"], node.Disks.Select(disk => disk.DiskId).Order(StringComparer.Ordinal).ToArray());
+        Assert.DoesNotContain(node.Disks, disk => string.Equals(disk.MountPath, AppContext.BaseDirectory, StringComparison.Ordinal));
+        Assert.All(node.Disks, disk => Assert.True(disk.TotalBytes > 0));
+        Assert.Equal(2, Assert.Single(topology.Pools).DiskCount);
+    }
+
+    [Fact]
     public async Task ClusterTopologyFiltersClustersAndMarksMissingDisksOffline()
     {
         await using var factory = new MeansWebApplicationFactory();

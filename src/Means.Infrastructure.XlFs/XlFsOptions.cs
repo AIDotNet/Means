@@ -93,3 +93,99 @@ public static class XlMetaSyncModes
     public const string Batch = "Batch";
     public const string None = "None";
 }
+
+public readonly record struct StoragePathCapacity(long TotalBytes, long AvailableBytes, string CapacityGroupId);
+
+public static class StoragePathCapacityReader
+{
+    public static StoragePathCapacity Read(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var drivePath = OperatingSystem.IsWindows() ? Path.GetPathRoot(fullPath) ?? fullPath : fullPath;
+        var drive = new DriveInfo(drivePath);
+        return new StoragePathCapacity(
+            Math.Max(0, drive.TotalSize),
+            Math.Max(0, drive.AvailableFreeSpace),
+            ResolveCapacityGroupId(fullPath));
+    }
+
+    private static string ResolveCapacityGroupId(string fullPath)
+    {
+        if (OperatingSystem.IsLinux())
+        {
+            var deviceId = TryResolveLinuxDeviceId(fullPath);
+            if (!string.IsNullOrWhiteSpace(deviceId))
+            {
+                return "linux-device:" + deviceId;
+            }
+        }
+
+        if (OperatingSystem.IsWindows())
+        {
+            return "windows-volume:" + (Path.GetPathRoot(fullPath) ?? fullPath);
+        }
+
+        return "path:" + fullPath;
+    }
+
+    private static string? TryResolveLinuxDeviceId(string fullPath)
+    {
+        const string mountInfoPath = "/proc/self/mountinfo";
+        try
+        {
+            return ResolveLinuxDeviceId(fullPath, File.ReadLines(mountInfoPath));
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    internal static string? ResolveLinuxDeviceId(string fullPath, IEnumerable<string> mountInfoLines)
+    {
+        string? bestDeviceId = null;
+        var bestMountPointLength = -1;
+        foreach (var line in mountInfoLines)
+        {
+            var fields = line.Split(' ');
+            if (fields.Length < 5)
+            {
+                continue;
+            }
+
+            var mountPoint = Path.TrimEndingDirectorySeparator(DecodeMountInfoPath(fields[4]));
+            if (mountPoint.Length <= bestMountPointLength
+                || !IsPathWithin(fullPath, mountPoint, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            bestDeviceId = fields[2];
+            bestMountPointLength = mountPoint.Length;
+        }
+
+        return bestDeviceId;
+    }
+
+    private static bool IsPathWithin(string path, string root, StringComparison comparison)
+    {
+        if (string.Equals(path, root, comparison))
+        {
+            return true;
+        }
+
+        var rootWithSeparator = root == Path.DirectorySeparatorChar.ToString()
+            ? root
+            : root + Path.DirectorySeparatorChar;
+        return path.StartsWith(rootWithSeparator, comparison);
+    }
+
+    private static string DecodeMountInfoPath(string value)
+    {
+        return value
+            .Replace("\\040", " ", StringComparison.Ordinal)
+            .Replace("\\011", "\t", StringComparison.Ordinal)
+            .Replace("\\012", "\n", StringComparison.Ordinal)
+            .Replace("\\134", "\\", StringComparison.Ordinal);
+    }
+}

@@ -973,7 +973,7 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
 
     private static string ResolveMetadataPath(XlFsOptions storage)
     {
-        var root = storage.Disks.Length > 0 ? storage.Disks[0] : storage.ObjectsPath;
+        var root = storage.Disks.FirstOrDefault(path => !string.IsNullOrWhiteSpace(path)) ?? storage.ObjectsPath;
         return Path.Combine(ResolvePath(root), ".means.sys", "meta");
     }
 
@@ -987,15 +987,9 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
     {
         try
         {
-            var root = Path.GetPathRoot(objectsPath);
-            if (string.IsNullOrWhiteSpace(root))
-            {
-                root = objectsPath;
-            }
-
-            var drive = new DriveInfo(root);
-            var totalBytes = Math.Max(0, drive.TotalSize);
-            var freeBytes = Math.Max(0, drive.AvailableFreeSpace);
+            var capacity = StoragePathCapacityReader.Read(objectsPath);
+            var totalBytes = capacity.TotalBytes;
+            var freeBytes = capacity.AvailableBytes;
             var usedBytes = Math.Max(0, totalBytes - freeBytes);
             return new DashboardCapacityResponse(
                 totalBytes,

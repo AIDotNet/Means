@@ -10,6 +10,26 @@ namespace Means.UnitTests;
 public sealed class XlFsStoreTests
 {
     [Fact]
+    public void LinuxMountInfoUsesLongestMatchingMountAndDecodesPath()
+    {
+        string[] mountInfo =
+        [
+            "20 19 0:67 / / rw,relatime - overlay overlay rw",
+            "21 20 0:44 /host/disk1 /disk1 rw,relatime - ext4 /dev/vdb1 rw",
+            "22 20 0:44 /host/disk2 /disk2 rw,relatime - ext4 /dev/vdb1 rw",
+            "23 20 8:2 /host/nested /disk1/nested rw,relatime - ext4 /dev/vdc1 rw",
+            """24 20 8:3 /host/escaped /disk\040space rw,relatime - ext4 /dev/vdd1 rw"""
+        ];
+
+        Assert.Equal("0:67", StoragePathCapacityReader.ResolveLinuxDeviceId("/other", mountInfo));
+        Assert.Equal("0:44", StoragePathCapacityReader.ResolveLinuxDeviceId("/disk1/file", mountInfo));
+        Assert.Equal("0:44", StoragePathCapacityReader.ResolveLinuxDeviceId("/disk2/file", mountInfo));
+        Assert.Equal("8:2", StoragePathCapacityReader.ResolveLinuxDeviceId("/disk1/nested/file", mountInfo));
+        Assert.Equal("8:3", StoragePathCapacityReader.ResolveLinuxDeviceId("/disk space/file", mountInfo));
+        Assert.Equal("0:67", StoragePathCapacityReader.ResolveLinuxDeviceId("/disk10/file", mountInfo));
+    }
+
+    [Fact]
     public async Task LogDbReplaysWalAndTruncatesPartialRecord()
     {
         var root = CreateTempRoot();
@@ -30,6 +50,52 @@ public sealed class XlFsStoreTests
             Assert.Equal("one", await reopened.GetJsonAsync<string>("b:alpha", CancellationToken.None));
             Assert.Equal("two", Encoding.UTF8.GetString((await reopened.GetAsync("b:beta", CancellationToken.None))!));
             Assert.Null(await reopened.GetAsync("b:deleted", CancellationToken.None));
+        }
+        finally
+        {
+            DeleteTempRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task LogDbReadsLegacyClusterNodeWithoutCapacityGroup()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            const string legacyNode = """
+                {
+                  "NodeId": "node-a",
+                  "ClusterId": "cluster-a",
+                  "HostName": "node-a",
+                  "Endpoint": "http://node-a",
+                  "Status": "Online",
+                  "RegisteredAt": "2026-01-01T00:00:00Z",
+                  "LastHeartbeatAt": "2026-01-01T00:00:00Z",
+                  "Disks": [
+                    {
+                      "DiskId": "disk-00",
+                      "NodeId": "node-a",
+                      "PoolId": "pool-a",
+                      "MountPath": "/data/disk1",
+                      "TotalBytes": 100,
+                      "AvailableBytes": 80,
+                      "Status": "Online",
+                      "LastSeenAt": "2026-01-01T00:00:00Z"
+                    }
+                  ],
+                  "FaultDomain": "node-a"
+                }
+                """;
+            await using var db = await MeansLogDb.OpenAsync(root, CancellationToken.None);
+            await db.PutBatchAsync(
+                [new LogDbMutation("legacy-node", Encoding.UTF8.GetBytes(legacyNode), false)],
+                CancellationToken.None);
+
+            var node = await db.GetJsonAsync<ClusterNodeInfo>("legacy-node", CancellationToken.None);
+
+            Assert.NotNull(node);
+            Assert.True(string.IsNullOrWhiteSpace(Assert.Single(node.Disks).CapacityGroupId));
         }
         finally
         {
@@ -1170,6 +1236,95 @@ public sealed class XlFsStoreTests
                 CancellationToken.None));
 
             Assert.Equal(MeansErrorCodes.InvalidPartOrder, ex.Code);
+        }
+        finally
+        {
+            DeleteTempRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task NodeRegistrationCountsSharedCapacityGroupOnce()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            await using var store = CreateStore(root);
+            var now = DateTimeOffset.UtcNow;
+            await store.RegisterNodeAsync(
+                new ClusterNodeRegistration(
+                    "cluster-a",
+                    "Cluster A",
+                    "node-a",
+                    "node-a",
+                    "http://node-a",
+                    "pool-a",
+                    "Pool A",
+                    [
+                        new StorageDiskRegistration("disk-00", "pool-a", "/data/disk1", 100, 80, StorageDiskStatuses.Online, "device-a"),
+                        new StorageDiskRegistration("disk-01", "pool-a", "/data/disk2", 100, 80, StorageDiskStatuses.Online, "device-a")
+                    ],
+                    now),
+                CancellationToken.None);
+
+            var topology = await store.GetClusterTopologyAsync(now.Subtract(TimeSpan.FromMinutes(1)), CancellationToken.None);
+
+            var pool = Assert.Single(topology.Pools);
+            Assert.Equal(2, pool.DiskCount);
+            Assert.Equal(100, pool.TotalBytes);
+            Assert.Equal(80, pool.AvailableBytes);
+        }
+        finally
+        {
+            DeleteTempRoot(root);
+        }
+    }
+
+    [Fact]
+    public async Task NodeRegistrationRemovesLegacyBlankConfigurationDisksOnly()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            await using var store = CreateStore(root);
+            var now = DateTimeOffset.UtcNow;
+            await store.RegisterNodeAsync(
+                new ClusterNodeRegistration(
+                    "cluster-a",
+                    "Cluster A",
+                    "node-a",
+                    "node-a",
+                    "http://node-a",
+                    "pool-a",
+                    "Pool A",
+                    [
+                        DiskRegistration("disk-00", Path.Combine(root, "disk1")),
+                        DiskRegistration("disk-02", AppContext.BaseDirectory),
+                        DiskRegistration("disk-04", AppContext.BaseDirectory),
+                        DiskRegistration("real-missing", "/data/real-missing")
+                    ],
+                    now),
+                CancellationToken.None);
+            await store.RegisterNodeAsync(
+                new ClusterNodeRegistration(
+                    "cluster-a",
+                    "Cluster A",
+                    "node-a",
+                    "node-a",
+                    "http://node-a",
+                    "pool-a",
+                    "Pool A",
+                    [DiskRegistration("disk-00", Path.Combine(root, "disk1"))],
+                    now.AddSeconds(1)),
+                CancellationToken.None);
+
+            var topology = await store.GetClusterTopologyAsync(now.Subtract(TimeSpan.FromMinutes(1)), CancellationToken.None);
+
+            var node = Assert.Single(topology.Nodes);
+            Assert.DoesNotContain(node.Disks, disk => disk.DiskId == "disk-02");
+            Assert.Equal(StorageDiskStatuses.Online, Assert.Single(node.Disks, disk => disk.DiskId == "disk-00").Status);
+            Assert.Equal(StorageDiskStatuses.Offline, Assert.Single(node.Disks, disk => disk.DiskId == "disk-04").Status);
+            Assert.Equal(StorageDiskStatuses.Offline, Assert.Single(node.Disks, disk => disk.DiskId == "real-missing").Status);
         }
         finally
         {

@@ -35,7 +35,8 @@ public sealed record StorageDiskInfo(
     long TotalBytes,
     long AvailableBytes,
     string Status,
-    DateTimeOffset LastSeenAt);
+    DateTimeOffset LastSeenAt,
+    string CapacityGroupId = "");
 
 public sealed record ClusterNodeInfo(
     string NodeId,
@@ -71,7 +72,8 @@ public sealed record StorageDiskRegistration(
     string MountPath,
     long TotalBytes,
     long AvailableBytes,
-    string Status);
+    string Status,
+    string CapacityGroupId = "");
 
 public sealed record ClusterNodeHeartbeat(
     string NodeId,
@@ -83,4 +85,5 @@ public sealed record StorageDiskHeartbeat(
     long TotalBytes,
     long AvailableBytes,
     string Status,
-    DateTimeOffset LastSeenAt);
+    DateTimeOffset LastSeenAt,
+    string CapacityGroupId = "");

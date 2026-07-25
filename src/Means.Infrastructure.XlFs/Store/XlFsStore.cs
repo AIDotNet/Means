@@ -74,7 +74,11 @@ public sealed partial class XlFsStore : IObjectStore,
                 return;
             }
 
-            var roots = _options.Disks.Length == 0 ? [_options.ObjectsPath] : _options.Disks.Select(ResolvePath).ToArray();
+            var configuredRoots = _options.Disks
+                .Where(path => !string.IsNullOrWhiteSpace(path))
+                .Select(ResolvePath)
+                .ToArray();
+            var roots = configuredRoots.Length == 0 ? [_options.ObjectsPath] : configuredRoots;
             var deploymentId = string.IsNullOrWhiteSpace(_options.DeploymentId) ? "local-xlfs" : _options.DeploymentId.Trim();
             var disks = new List<XlDisk>();
             for (var index = 0; index < roots.Length; index++)
@@ -82,8 +86,15 @@ public sealed partial class XlFsStore : IObjectStore,
                 var root = roots[index];
                 Directory.CreateDirectory(root);
                 var format = await EnsureDiskFormatAsync(root, deploymentId, index, cancellationToken);
-                var drive = DriveInfoFor(root);
-                disks.Add(new XlDisk(format.DiskId, root, format.SetIndex, true, drive.TotalSize, drive.AvailableFreeSpace));
+                var capacity = StoragePathCapacityReader.Read(root);
+                disks.Add(new XlDisk(
+                    format.DiskId,
+                    root,
+                    format.SetIndex,
+                    true,
+                    capacity.TotalBytes,
+                    capacity.AvailableBytes,
+                    capacity.CapacityGroupId));
             }
 
             _disks = disks;
@@ -256,11 +267,12 @@ public sealed partial class XlFsStore : IObjectStore,
         {
             try
             {
-                var drive = DriveInfoFor(disk.RootPath);
+                var capacity = StoragePathCapacityReader.Read(disk.RootPath);
                 return disk with
                 {
-                    TotalBytes = Math.Max(0, drive.TotalSize),
-                    AvailableBytes = Math.Max(0, drive.AvailableFreeSpace)
+                    TotalBytes = capacity.TotalBytes,
+                    AvailableBytes = capacity.AvailableBytes,
+                    CapacityGroupId = capacity.CapacityGroupId
                 };
             }
             catch
@@ -494,12 +506,6 @@ public sealed partial class XlFsStore : IObjectStore,
         return Path.IsPathRooted(path) ? path : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, path));
     }
 
-    private static DriveInfo DriveInfoFor(string path)
-    {
-        var root = Path.GetPathRoot(Path.GetFullPath(path));
-        return new DriveInfo(string.IsNullOrWhiteSpace(root) ? path : root);
-    }
-
     private static async Task<string> ComputeFileSha256Async(string path, CancellationToken cancellationToken)
     {
         await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
@@ -520,7 +526,14 @@ public sealed partial class XlFsStore : IObjectStore,
         }
     }
 
-    private sealed record XlDisk(string DiskId, string RootPath, int SetIndex, bool Online, long TotalBytes, long AvailableBytes);
+    private sealed record XlDisk(
+        string DiskId,
+        string RootPath,
+        int SetIndex,
+        bool Online,
+        long TotalBytes,
+        long AvailableBytes,
+        string CapacityGroupId);
 
     private sealed class NoopClusterShardTransport : IClusterShardTransport
     {

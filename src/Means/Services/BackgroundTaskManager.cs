@@ -129,7 +129,8 @@ public sealed class BackgroundTaskManager : IBackgroundTaskManager
                     disk.TotalBytes,
                     disk.AvailableBytes,
                     disk.Status,
-                    now)).ToArray(),
+                    now,
+                    disk.CapacityGroupId)).ToArray(),
                 now),
             cancellationToken);
         return $"node={registration.NodeId}; disks={registration.Disks.Count}";
@@ -240,33 +241,32 @@ public sealed class BackgroundTaskManager : IBackgroundTaskManager
     private IReadOnlyList<StorageDiskRegistration> ReadObjectDisks(ClusterOptions options)
     {
         var storage = _storageOptions.Value;
-        var roots = storage.Disks.Length == 0
+        var configuredRoots = storage.Disks
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(ResolvePath)
+            .ToArray();
+        var roots = configuredRoots.Length == 0
             ? [ResolvePath(storage.ObjectsPath)]
-            : storage.Disks.Select(ResolvePath).ToArray();
+            : configuredRoots;
         var disks = new List<StorageDiskRegistration>(roots.Length);
         for (var index = 0; index < roots.Length; index++)
         {
             var path = roots[index];
-            var fallbackDiskId = roots.Length == 1 && storage.Disks.Length == 0
+            var fallbackDiskId = roots.Length == 1 && configuredRoots.Length == 0
                 ? Normalize(options.ObjectDiskId, "local-objects")
                 : "disk-" + index.ToString("D2");
             try
             {
                 Directory.CreateDirectory(path);
-                var root = Path.GetPathRoot(path);
-                if (string.IsNullOrWhiteSpace(root))
-                {
-                    root = path;
-                }
-
-                var drive = new DriveInfo(root);
+                var capacity = StoragePathCapacityReader.Read(path);
                 disks.Add(new StorageDiskRegistration(
                     ReadFormattedDiskId(path, fallbackDiskId),
                     Normalize(options.PoolId, "pool-1"),
                     path,
-                    Math.Max(0, drive.TotalSize),
-                    Math.Max(0, drive.AvailableFreeSpace),
-                    StorageDiskStatuses.Online));
+                    capacity.TotalBytes,
+                    capacity.AvailableBytes,
+                    StorageDiskStatuses.Online,
+                    capacity.CapacityGroupId));
             }
             catch
             {

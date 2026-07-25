@@ -27,11 +27,12 @@ public sealed partial class XlFsStore
             Math.Max(0, disk.TotalBytes),
             Math.Max(0, disk.AvailableBytes),
             NormalizeDiskStatus(disk.Status),
-            registeredAt)).ToArray();
+            registeredAt,
+            disk.CapacityGroupId)).ToArray();
         var incomingDiskIds = incomingDisks.Select(disk => disk.DiskId).ToHashSet(StringComparer.Ordinal);
         var disks = existingNode is not null && string.Equals(existingNode.ClusterId, registration.ClusterId, StringComparison.Ordinal)
             ? incomingDisks.Concat(existingNode.Disks
-                .Where(disk => !incomingDiskIds.Contains(disk.DiskId))
+                .Where(disk => !incomingDiskIds.Contains(disk.DiskId) && !IsLegacyBlankConfigurationDisk(disk))
                 .Select(disk => disk with { Status = StorageDiskStatuses.Offline, LastSeenAt = registeredAt }))
                 .ToArray()
             : incomingDisks;
@@ -85,7 +86,8 @@ public sealed partial class XlFsStore
                 TotalBytes = Math.Max(0, heartbeatDisk.TotalBytes),
                 AvailableBytes = Math.Max(0, heartbeatDisk.AvailableBytes),
                 Status = NormalizeDiskStatus(heartbeatDisk.Status),
-                LastSeenAt = heartbeatDisk.LastSeenAt.ToUniversalTime()
+                LastSeenAt = heartbeatDisk.LastSeenAt.ToUniversalTime(),
+                CapacityGroupId = heartbeatDisk.CapacityGroupId
             };
         }).ToArray();
         var updated = node with
@@ -129,6 +131,7 @@ public sealed partial class XlFsStore
             .Select(group =>
             {
                 var online = group.Where(disk => string.Equals(disk.Status, StorageDiskStatuses.Online, StringComparison.Ordinal)).ToArray();
+                var capacity = SumDistinctCapacity(online);
                 return new StoragePoolInfo(
                     group.Key,
                     cluster.ClusterId,
@@ -136,8 +139,8 @@ public sealed partial class XlFsStore
                     cluster.CreatedAt,
                     group.Select(disk => disk.NodeId).Distinct(StringComparer.Ordinal).Count(),
                     group.Count(),
-                    online.Sum(disk => disk.TotalBytes),
-                    online.Sum(disk => disk.AvailableBytes));
+                    capacity.TotalBytes,
+                    capacity.AvailableBytes);
             })
             .OrderBy(pool => pool.PoolId, StringComparer.Ordinal)
             .ToArray();
@@ -1376,7 +1379,8 @@ public sealed partial class XlFsStore
             disk.TotalBytes,
             disk.AvailableBytes,
             nodeStatus == ClusterNodeStatuses.Online && disk.Online ? StorageDiskStatuses.Online : StorageDiskStatuses.Offline,
-            now)).ToArray();
+            now,
+            disk.CapacityGroupId)).ToArray();
         var node = new ClusterNodeInfo(
             "local",
             cluster.ClusterId,
@@ -1388,6 +1392,7 @@ public sealed partial class XlFsStore
             disks,
             NormalizeFaultDomain("", "local"));
         var online = disks.Where(disk => disk.Status == StorageDiskStatuses.Online).ToArray();
+        var capacity = SumDistinctCapacity(online);
         var pool = new StoragePoolInfo(
             _options.SetId,
             cluster.ClusterId,
@@ -1395,9 +1400,21 @@ public sealed partial class XlFsStore
             now,
             1,
             disks.Length,
-            online.Sum(disk => disk.TotalBytes),
-            online.Sum(disk => disk.AvailableBytes));
+            capacity.TotalBytes,
+            capacity.AvailableBytes);
         return new ClusterTopology(cluster, [node], [pool]);
+    }
+
+    private static (long TotalBytes, long AvailableBytes) SumDistinctCapacity(IEnumerable<StorageDiskInfo> disks)
+    {
+        var capacityGroups = disks
+            .GroupBy(disk => (
+                disk.NodeId,
+                CapacityGroupId: string.IsNullOrWhiteSpace(disk.CapacityGroupId) ? disk.DiskId : disk.CapacityGroupId))
+            .ToArray();
+        return (
+            capacityGroups.Sum(group => group.Min(disk => disk.TotalBytes)),
+            capacityGroups.Sum(group => group.Min(disk => disk.AvailableBytes)));
     }
 
     private static string NormalizeFaultDomain(string? faultDomain, string nodeId)
@@ -2130,6 +2147,27 @@ public sealed partial class XlFsStore
         return string.Equals(status, StorageDiskStatuses.Online, StringComparison.OrdinalIgnoreCase)
             ? StorageDiskStatuses.Online
             : StorageDiskStatuses.Offline;
+    }
+
+    private static bool IsLegacyBlankConfigurationDisk(StorageDiskInfo disk)
+    {
+        if (!string.Equals(disk.DiskId, "disk-02", StringComparison.Ordinal)
+            && !string.Equals(disk.DiskId, "disk-03", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        try
+        {
+            var mountPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(disk.MountPath));
+            var applicationPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(AppContext.BaseDirectory));
+            var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            return string.Equals(mountPath, applicationPath, comparison);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static void ValidateRegistration(ClusterNodeRegistration registration)
