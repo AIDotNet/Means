@@ -199,7 +199,7 @@ export function BucketDetailPage({ bucketName }: BucketDetailPageProps) {
         {activeTab === "overview" ? (
           <BucketOverview summary={summary} settings={settings} />
         ) : null}
-        {activeTab === "objects" ? <ObjectBrowser bucketName={bucketName} /> : null}
+        {activeTab === "objects" ? <ObjectBrowser bucketName={bucketName} onObjectsChanged={loadSummary} /> : null}
         {activeTab === "versions" ? <VersionBrowser bucketName={bucketName} /> : null}
         {activeTab === "lifecycle" ? <LifecycleEditor bucketName={bucketName} /> : null}
         {activeTab === "policy" ? (

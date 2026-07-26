@@ -60,9 +60,10 @@ import {
 
 type ObjectBrowserProps = {
   bucketName: string
+  onObjectsChanged?: () => Promise<void>
 }
 
-export function ObjectBrowser({ bucketName }: ObjectBrowserProps) {
+export function ObjectBrowser({ bucketName, onObjectsChanged }: ObjectBrowserProps) {
   const { t } = useTranslation()
   const [prefix, setPrefix] = useState("")
   const [query, setQuery] = useState("")
@@ -96,7 +97,7 @@ export function ObjectBrowser({ bucketName }: ObjectBrowserProps) {
       const params = new URLSearchParams()
       params.set("prefix", prefix)
       params.set("delimiter", "/")
-      params.set("maxKeys", "1000")
+      params.set("maxKeys", "10000")
       const page = await api.objects(bucketName, params)
       applyPage(page, false)
       setSelectedKeys(new Set())
@@ -117,7 +118,7 @@ export function ObjectBrowser({ bucketName }: ObjectBrowserProps) {
       const params = new URLSearchParams()
       params.set("prefix", prefix)
       params.set("delimiter", "/")
-      params.set("maxKeys", "1000")
+      params.set("maxKeys", "10000")
       params.set("continuationToken", continuationToken)
       const page = await api.objects(bucketName, params)
       applyPage(page, true)
@@ -213,7 +214,7 @@ export function ObjectBrowser({ bucketName }: ObjectBrowserProps) {
       toast.success(t("objectBrowser.toast.deleted"))
       setDeleteTargetKey(null)
       setSelected(null)
-      await load()
+      await Promise.all([load(), onObjectsChanged?.()])
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("objectBrowser.errors.deleteFailed"))
     }
@@ -260,7 +261,7 @@ export function ObjectBrowser({ bucketName }: ObjectBrowserProps) {
       }
       setSelectedKeys(new Set())
       setBatchDeleteOpen(false)
-      await load()
+      await Promise.all([load(), onObjectsChanged?.()])
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("objectBrowser.errors.batchDeleteFailed"))
     } finally {

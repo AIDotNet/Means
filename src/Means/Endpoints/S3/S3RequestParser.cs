@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Text;
 using Means.Core;
 using Means.Protocol.S3;
@@ -113,7 +113,9 @@ internal static class S3RequestParser
 
     public static int ParseMaxKeys(string? value)
     {
-        return int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) ? parsed : 1000;
+        return int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
+            ? Math.Clamp(parsed, 1, 1000)
+            : 1000;
     }
 
     public static int ParseMaxUploads(string? value)

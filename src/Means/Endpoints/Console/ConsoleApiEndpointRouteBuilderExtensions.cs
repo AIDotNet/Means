@@ -1,4 +1,4 @@
-﻿using System.Reflection;
+using System.Reflection;
 using System.Security.Claims;
 using System.Text.Json;
 using Means.Configuration;
@@ -534,7 +534,7 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
     {
         var result = await store.ListObjectsAsync(
             bucketName,
-            new ListObjectsOptions(prefix, delimiter, continuationToken, maxKeys ?? 1000),
+            new ListObjectsOptions(prefix, delimiter, continuationToken, maxKeys ?? 10_000),
             cancellationToken);
         return Results.Ok(result);
     }
@@ -597,9 +597,9 @@ public static class ConsoleApiEndpointRouteBuilderExtensions
             throw new MeansException(MeansErrorCodes.InvalidArgument, "Objects list is required.", 400);
         }
 
-        if (request.Objects.Count > 1000)
+        if (request.Objects.Count > 10_000)
         {
-            throw new MeansException(MeansErrorCodes.InvalidArgument, "Batch delete supports at most 1000 objects.", 400);
+            throw new MeansException(MeansErrorCodes.InvalidArgument, "Batch delete supports at most 10000 objects.", 400);
         }
 
         foreach (var item in request.Objects)

@@ -54,7 +54,7 @@ public sealed partial class XlFsStore
         CancellationToken cancellationToken)
     {
         await EnsureBucketAsync(bucketName, cancellationToken);
-        var maxKeys = Math.Clamp(options.MaxKeys, 1, 1000);
+        var maxKeys = Math.Clamp(options.MaxKeys, 1, 10_000);
         var prefix = options.Prefix ?? string.Empty;
         var dbPrefix = Keys.CurrentObjectPrefix(bucketName) + Escape(prefix);
         var objects = new List<ListedObject>();

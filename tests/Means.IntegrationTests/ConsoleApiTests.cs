@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -178,6 +178,33 @@ public sealed class ConsoleApiTests
         var error = await ReadJsonAsync<ConsoleErrorResponse>(limited);
         Assert.Equal("SlowDown", error.Code);
         Assert.Equal(429, error.StatusCode);
+    }
+
+    [Fact]
+    public async Task ConsoleBatchDeleteUsesTenThousandObjectLimit()
+    {
+        await using var factory = new MeansWebApplicationFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost")
+        });
+
+        var login = await client.PostAsJsonAsync("/api/console/auth/login", new LoginRequest("admin", "meansadmin"));
+        Assert.Equal(HttpStatusCode.OK, login.StatusCode);
+
+        var allowed = await client.PostAsJsonAsync(
+            "/api/console/buckets/console-bucket/objects/batch-delete",
+            new BatchDeleteRequest(Enumerable.Repeat(new BatchDeleteObjectRequest(string.Empty), 10_000).ToArray()));
+        Assert.Equal(HttpStatusCode.BadRequest, allowed.StatusCode);
+        var allowedError = await ReadJsonAsync<ConsoleErrorResponse>(allowed);
+        Assert.Equal("Invalid object key.", allowedError.Message);
+
+        var rejected = await client.PostAsJsonAsync(
+            "/api/console/buckets/console-bucket/objects/batch-delete",
+            new BatchDeleteRequest(Enumerable.Repeat(new BatchDeleteObjectRequest(string.Empty), 10_001).ToArray()));
+        Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode);
+        var rejectedError = await ReadJsonAsync<ConsoleErrorResponse>(rejected);
+        Assert.Equal("Batch delete supports at most 10000 objects.", rejectedError.Message);
     }
 
     [Fact]
@@ -994,6 +1021,10 @@ public sealed class ConsoleApiTests
     private sealed record AbortMultipartRequest(string Key, string UploadId);
 
     private sealed record ListObjectsResponse(IReadOnlyList<ListedObjectResponse> Objects);
+
+    private sealed record BatchDeleteRequest(IReadOnlyList<BatchDeleteObjectRequest> Objects);
+
+    private sealed record BatchDeleteObjectRequest(string Key, string? VersionId = null);
 
     private sealed record ListedObjectResponse(string Key, long Size, string ContentType);
 

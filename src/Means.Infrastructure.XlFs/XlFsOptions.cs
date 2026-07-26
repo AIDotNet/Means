@@ -1,4 +1,4 @@
-﻿namespace Means.Infrastructure.XlFs;
+namespace Means.Infrastructure.XlFs;
 
 public sealed class XlFsOptions
 {
